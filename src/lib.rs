@@ -3,3 +3,4 @@ pub type Chunk = usize;
 
 pub mod binary;
 pub mod mnist;
+pub mod integer;

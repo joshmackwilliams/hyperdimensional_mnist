@@ -7,14 +7,15 @@ use rand::{rngs::SmallRng, SeedableRng};
 // Needed to write partial lines to the console
 use std::io::{self, Write};
 
-use hd_vsa_mnist::binary::{majority, make_feature_vectors, classify};
+use hd_vsa_mnist::binary::{classify, majority, make_feature_vectors};
+use hd_vsa_mnist::integer::IntegerHDModel;
 use hd_vsa_mnist::mnist::{encode_images, load_mnist};
 use hd_vsa_mnist::Chunk;
 
 fn main() {
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
-    let n_chunks = 128;
+    let n_chunks = 5000;
     let mut rng = SmallRng::seed_from_u64(0);
 
     // Load the dataset - raw images and labels, no vectorization
@@ -30,6 +31,7 @@ fn main() {
     assert!(!train_images.is_empty(), "No training images found");
     let image_area = train_images[0].len();
 
+    /*
     // Set up the feature vectors
     // For now, we use two levels. This will be more sophisticated in the future
     print!("Generating feature vectors... ");
@@ -60,6 +62,16 @@ fn main() {
         majority(examples, n_chunks, class_vectors.slice_mut(s![class, ..]));
     }
     println!("Done");
+    */
+
+    let mut model = IntegerHDModel::new(n_chunks, image_area, 256, 10, &mut rng);
+    print!("Encoding images using feature vectors... ");
+    let _ = io::stdout().flush();
+    let train_x = model.encode(&train_images);
+    println!("Done");
+    let train_labels: Vec<i32> = train_labels.into_iter().map(|x| x as i32).collect();
+    let train_y = Array1::from(train_labels);
+    model.train(train_x.view(), train_y.view());
 
     // Load the test data
     print!("Loading test data... ");
@@ -71,12 +83,17 @@ fn main() {
         test_filename
     );
 
+    /*
     // Encode the test data as we did with the training data
     print!("Encoding test data... ");
     let _ = io::stdout().flush();
     let test_x = encode_images(test_images, feature_vecs.view(), n_chunks);
     let test_y = Array1::from(test_labels);
     println!("Done");
+    */
+
+    let test_x = model.encode(&test_images);
+    let test_y = Array1::from(test_labels);
 
     // Classify the test data and compute accuracy
     print!("Testing model... ");
@@ -85,8 +102,8 @@ fn main() {
     for i in 0..test_x.shape()[0] {
         let x = test_x.slice(s![i, ..]);
         let y = &test_y[i];
-        let class = classify(x, class_vectors.view());
-        if class == *y {
+        let class = model.classify(x);
+        if class == *y as usize {
             correct += 1;
         }
     }
