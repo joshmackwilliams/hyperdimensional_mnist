@@ -112,7 +112,7 @@ impl UntrainedIntegerHDModel {
         output
     }
 
-    pub fn train(self, examples: &[u32], labels: &[usize]) -> IntegerHDModel {
+    pub fn train(self, examples: &[u32], labels: &[usize], batch_size: usize) -> IntegerHDModel {
         // Allocate space for integer-valued class vectors
         let class_vectors = vec![0_i32; self.n_classes * self.model_dimensionality];
 
@@ -160,11 +160,11 @@ impl UntrainedIntegerHDModel {
                 "[Binary retraining] Correct examples at epoch {}: {}",
                 epoch, correct
             );
-            if correct < best {
-                epochs_since_improvement += 1;
-            } else {
+            if correct > best {
                 epochs_since_improvement = 0;
                 best = correct;
+            } else {
+                epochs_since_improvement += 1;
             }
             epoch += 1;
         }
@@ -178,26 +178,41 @@ impl UntrainedIntegerHDModel {
         let mut epoch: usize = 0;
         let mut best = 0_usize;
         let mut epochs_since_improvement = 0;
+        let mut predictions = vec![0_usize; batch_size];
         while epochs_since_improvement < 5 {
             let mut correct = 0_usize;
-            examples
-                .chunks(model.untrained_model.model_dimensionality_chunks)
-                .zip(labels.iter())
-                .for_each(|(example, &label)| {
-                    let predicted = model.classify(example);
-                    if predicted != label {
-                        for i in 0..model.untrained_model.model_dimensionality {
-                            let bit = bit_as_i32(example, i);
-                            model.class_vectors
-                                [i + (label * model.untrained_model.model_dimensionality)] += bit;
-                            model.class_vectors
-                                [i + (predicted * model.untrained_model.model_dimensionality)] -=
-                                bit;
+            for (batch, batch_labels) in examples
+                .chunks(model.untrained_model.model_dimensionality_chunks * batch_size)
+                .zip(labels.chunks(batch_size))
+            {
+                predictions
+                    .par_iter_mut()
+                    .zip(batch.par_chunks(model.untrained_model.model_dimensionality_chunks))
+                    .for_each(|(prediction, example)| {
+                        *prediction = model.classify(example);
+                    });
+
+                batch
+                    .chunks(model.untrained_model.model_dimensionality_chunks)
+                    .zip(batch_labels.iter())
+                    .zip(predictions.iter())
+                    .for_each(|((example, &label), &predicted)| {
+                        //let predicted = model.classify_binary_from_integer(example);
+                        if predicted != label {
+                            for i in 0..model.untrained_model.model_dimensionality {
+                                let bit = bit_as_i32(example, i);
+                                model.class_vectors
+                                    [i + (label * model.untrained_model.model_dimensionality)] +=
+                                    bit;
+                                model.class_vectors[i
+                                    + (predicted * model.untrained_model.model_dimensionality)] -=
+                                    bit;
+                            }
+                        } else {
+                            correct += 1;
                         }
-                    } else {
-                        correct += 1;
-                    }
-                });
+                    });
+            }
             println!(
                 "[Integer retraining] Correct examples at epoch {}: {}",
                 epoch, correct
