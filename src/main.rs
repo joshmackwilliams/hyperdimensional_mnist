@@ -11,7 +11,7 @@ use hd_vsa_mnist::mnist::load_mnist;
 fn main() {
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
-    let n_chunks = 64; // Dimensionality of the model / 32
+    let n_chunks = 156; // Dimensionality of the model / 32
     let mut rng = SmallRng::seed_from_u64(0);
 
     // Load the dataset - raw images and labels, no vectorization
@@ -44,11 +44,11 @@ fn main() {
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Train the model
-    print!("Training model... ");
+    println!("=== Training model ===");
     let _ = io::stdout().flush();
     let now = Instant::now();
     model.train(&train_x, &train_y);
-    println!("Done [{}ms]", now.elapsed().as_millis());
+    println!("=== Done [{}ms] ===", now.elapsed().as_millis());
 
     // Load the test data
     print!("Loading test data... ");
@@ -70,13 +70,27 @@ fn main() {
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Classify the test data and compute accuracy
-    print!("Testing model... ");
+    print!("Testing integer classifier... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
     let mut correct = 0;
-    for (x, y) in test_x.chunks(test_x.len() / test_images.len()).zip(test_y) {
+    for (x, y) in test_x.chunks(test_x.len() / test_images.len()).zip(&test_y) {
         let class = model.classify(x);
-        if class == y {
+        if class == *y {
+            correct += 1;
+        }
+    }
+    let acc = correct as f64 / test_images.len() as f64;
+    println!("Done - Accuracy = {} [{}ms]", acc, now.elapsed().as_millis());
+
+    // Similarly, test the binary classifier
+    print!("Testing binary classifier... ");
+    let _ = io::stdout().flush();
+    let now = Instant::now();
+    let mut correct = 0;
+    for (x, y) in test_x.chunks(test_x.len() / test_images.len()).zip(&test_y) {
+        let class = model.classify_binary(x);
+        if class == *y {
             correct += 1;
         }
     }

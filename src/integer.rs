@@ -132,21 +132,23 @@ impl IntegerHDModel {
                 }
             });
 
-        /*
         let mut epoch: usize = 0;
         let mut best = 0_usize;
         let mut epochs_since_improvement = 0;
         while epochs_since_improvement < 5 {
             let mut correct = 0_usize;
             examples
-                .rows()
+                .chunks(self.model_dimensionality_chunks)
                 .into_iter()
                 .zip(labels.iter())
                 .for_each(|(example, label)| {
-                    let predicted = self.classify(example);
+                    let predicted = self.classify_binary(example);
                     if predicted != (*label as usize) {
-                        self.class_vectors.row_mut(*label).add_assign(&example);
-                        self.class_vectors.row_mut(predicted).sub_assign(&example);
+                        for i in 0..self.model_dimensionality {
+                            let bit = bit_as_i32(example, i);
+                            self.class_vectors[i + (*label * self.model_dimensionality)] += bit;
+                            self.class_vectors[i + (predicted * self.model_dimensionality)] -= bit;
+                        }
                     } else {
                         correct += 1;
                     }
@@ -160,7 +162,6 @@ impl IntegerHDModel {
             }
             epoch += 1;
         }
-        */
     }
 
     pub fn classify(&self, input: &[u32]) -> usize {
@@ -172,6 +173,29 @@ impl IntegerHDModel {
             .unwrap()
             .0
     }
+
+    pub fn classify_binary(&self, input: &[u32]) -> usize {
+        self.class_vectors
+            .chunks(self.model_dimensionality)
+            .enumerate()
+            .min_by_key(|(_, x)| hamming_distance_integer(input, x))
+            .unwrap()
+            .0
+    }
+}
+
+pub fn hamming_distance_integer(binary_vector: &[u32], integer_vector: &[i32]) -> u32 {
+    let mut count = 0;
+    for (chunk_index, chunk) in binary_vector.iter().enumerate() {
+        let chunk_offset = chunk_index << 5;
+        let mut chunk_shifting = *chunk;
+        for bit_index in (0..32).rev() {
+            let integer_value = integer_vector[chunk_offset + bit_index];
+            count += ((integer_value as u32) ^ chunk_shifting) >> 31;
+            chunk_shifting <<= 1;
+        }
+    }
+    count
 }
 
 // Majority function, operating on a list of counts and a threshold
@@ -254,5 +278,13 @@ mod tests {
         v[0..8].copy_from_slice(&[1, 2, -3, -4, 5, 6, -7, -8]);
         let w = [0b10110000];
         assert_eq!(dot(&w, &v), 1 + 2 - 3 - 4 - 5 - 6 - 7 + 8);
+    }
+
+    #[test]
+    pub fn test_hamming_distance_integer() {
+        let mut v = [1; 32];
+        v[0..8].copy_from_slice(&[1, 2, -3, -4, 5, 6, -7, -8]);
+        let w = [0b10110000];
+        assert_eq!(hamming_distance_integer(&w, &v), 5);
     }
 }
