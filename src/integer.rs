@@ -156,7 +156,10 @@ impl UntrainedIntegerHDModel {
                         correct += 1;
                     }
                 });
-            println!("[Binary retraining] Correct examples at epoch {}: {}", epoch, correct);
+            println!(
+                "[Binary retraining] Correct examples at epoch {}: {}",
+                epoch, correct
+            );
             if correct < best {
                 epochs_since_improvement += 1;
             } else {
@@ -195,12 +198,15 @@ impl UntrainedIntegerHDModel {
                         correct += 1;
                     }
                 });
-            println!("[Integer retraining] Correct examples at epoch {}: {}", epoch, correct);
-            if correct < best {
-                epochs_since_improvement += 1;
-            } else {
+            println!(
+                "[Integer retraining] Correct examples at epoch {}: {}",
+                epoch, correct
+            );
+            if correct > best {
                 epochs_since_improvement = 0;
                 best = correct;
+            } else {
+                epochs_since_improvement += 1;
             }
             epoch += 1;
         }
@@ -224,7 +230,7 @@ impl IntegerHDModel {
     pub fn classify(&self, input: &[u32]) -> usize {
         self.class_vectors
             .chunks(self.untrained_model.model_dimensionality)
-            .map(|x| cosine_similarity(input, x))
+            .map(|x| square_cosine_similarity(input, x))
             .enumerate()
             .max_by(|(_, x), (_, y)| x.partial_cmp(y).unwrap())
             .unwrap()
@@ -300,21 +306,14 @@ fn count_bits_unsigned(chunk: u32, counts: &mut [u32]) {
     }
 }
 
-// Compute the magnitured of an integer vector
-fn magnitude(a: &[i32]) -> f64 {
-    let square_sum: i64 = a
-        .iter()
-        .map(|x| {
-            let x = *x as i64;
-            x * x
-        })
-        .sum();
-    (square_sum as f64).sqrt()
+// Compute the magnitude of an integer vector
+fn square_magnitude(a: &[i32]) -> i64 {
+    a.iter().map(|x| (x * x) as i64).sum::<i64>()
 }
 
 // Compute the dot product of an integer vector with a binary vector
-fn dot(binary_vec: &[u32], integer_vec: &[i32]) -> i32 {
-    let mut sum: i32 = 0;
+fn dot(binary_vec: &[u32], integer_vec: &[i32]) -> i64 {
+    let mut sum: i64 = 0;
 
     // Iterate over the chunks
     for (chunk_index, &chunk) in binary_vec.iter().enumerate() {
@@ -327,7 +326,7 @@ fn dot(binary_vec: &[u32], integer_vec: &[i32]) -> i32 {
             // Hopefully saves some time over converting to 1 or -1 and doing a multiplication
             let xor_mask = ((chunk as i32) << (31 - bit_index)) >> 31;
             let add = xor_mask & 1;
-            sum += (feature_value ^ xor_mask) + add;
+            sum += ((feature_value ^ xor_mask) + add) as i64;
         }
     }
 
@@ -335,8 +334,10 @@ fn dot(binary_vec: &[u32], integer_vec: &[i32]) -> i32 {
 }
 
 // Compute cosine similarity between and integer vector and a binary vector
-pub fn cosine_similarity(a: &[u32], b: &[i32]) -> f64 {
-    (dot(a, b) as f64) / magnitude(b)
+pub fn square_cosine_similarity(a: &[u32], b: &[i32]) -> f64 {
+    let d = dot(a, b);
+    //(d * d * d.signum()) / (square_magnitude(b) / 16)
+    (d as f64) / (square_magnitude(b) as f64).sqrt()
 }
 
 // Utility function to get a bit from a vector as -1 or 1

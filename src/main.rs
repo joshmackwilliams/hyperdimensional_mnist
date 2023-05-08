@@ -11,8 +11,8 @@ use hd_vsa_mnist::mnist::load_mnist;
 fn main() {
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
-    let n_chunks = 156; // Dimensionality of the model / 32
-    //let n_chunks = 32; // Small dimensionality used for testing
+    //let n_chunks = 156; // Dimensionality of the model / 32
+    let n_chunks = 32; // Small dimensionality used for testing
     let mut rng = SmallRng::seed_from_u64(0);
 
     // Load the dataset - raw images and labels, no vectorization
