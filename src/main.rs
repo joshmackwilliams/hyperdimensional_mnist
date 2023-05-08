@@ -5,13 +5,14 @@ use rand::{rngs::SmallRng, SeedableRng};
 use std::io::{self, Write};
 use std::time::Instant;
 
-use hd_vsa_mnist::integer::IntegerHDModel;
+use hd_vsa_mnist::integer::{UntrainedIntegerHDModel};
 use hd_vsa_mnist::mnist::load_mnist;
 
 fn main() {
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
     let n_chunks = 156; // Dimensionality of the model / 32
+    //let n_chunks = 32; // Small dimensionality used for testing
     let mut rng = SmallRng::seed_from_u64(0);
 
     // Load the dataset - raw images and labels, no vectorization
@@ -33,7 +34,7 @@ fn main() {
     print!("Initializing model... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let mut model = IntegerHDModel::new(n_chunks, image_area, 256, 10, &mut rng);
+    let model = UntrainedIntegerHDModel::new(n_chunks, image_area, 256, 10, &mut rng);
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Encode the training images using the model
@@ -47,7 +48,7 @@ fn main() {
     println!("=== Training model ===");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    model.train(&train_x, &train_y);
+    let model = model.train(&train_x, &train_y);
     println!("=== Done [{}ms] ===", now.elapsed().as_millis());
 
     // Load the test data
