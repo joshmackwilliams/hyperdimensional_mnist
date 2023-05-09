@@ -249,42 +249,6 @@ fn binarize_signed_chunk(chunk: &[Integer]) -> BinaryChunk {
     output
 }
 
-// Compute the magnitude of an integer vector
-fn square_magnitude(a: &[Integer]) -> i64 {
-    a.iter()
-        .map(|&x| {
-            let x = x as i64;
-            x * x
-        })
-        .sum::<i64>()
-}
-
-// Compute the dot product of an integer vector with a binary vector
-fn dot(binary_vec: &[BinaryChunk], integer_vec: &[Integer]) -> i64 {
-    let mut sum: i64 = 0;
-
-    // Iterate over the chunks
-    for (chunk_index, &chunk) in binary_vec.iter().enumerate() {
-        let chunk_bit_offset = chunk_index * BinaryChunk::BITS as usize;
-        // Iterate over the bits
-        for bit_index in 0..BinaryChunk::BITS as usize {
-            // Grab the value of this feature from the integer vector
-            let feature_value = integer_vec[bit_index + chunk_bit_offset];
-            let multiplier = ((chunk >> bit_index) & 1) as i64 * -2 + 1;
-            sum += feature_value as i64 * multiplier;
-        }
-    }
-
-    sum
-}
-
-// Compute cosine similarity between and integer vector and a binary vector
-pub fn square_cosine_similarity(a: &[BinaryChunk], b: &[Integer]) -> f64 {
-    let d = dot(a, b);
-    //(d * d * d.signum()) / (square_magnitude(b) / 16)
-    (d as f64) / (square_magnitude(b) as f64).sqrt()
-}
-
 // Utility function to get a bit from a vector as -1 or 1
 fn bit_as_integer(chunks: &[BinaryChunk], bit_index: usize) -> Integer {
     let chunk = chunks[bit_index / BinaryChunk::BITS as usize];
@@ -314,22 +278,6 @@ mod tests {
         assert_eq!(bit_as_integer(&v, 3), -1);
         assert_eq!(bit_as_integer(&v, 4), 1);
         assert_eq!(bit_as_integer(&v, 0), 1);
-    }
-
-    #[test]
-    pub fn test_dot() {
-        let mut v = [0; BinaryChunk::BITS as usize];
-        v[0..8].copy_from_slice(&[1, 2, -3, -4, 5, 6, -7, -8]);
-        let w = [0b10110000];
-        assert_eq!(dot(&w, &v), 1 + 2 - 3 - 4 - 5 - 6 - 7 + 8);
-    }
-
-    #[test]
-    pub fn test_hamming_distance_integer() {
-        let mut v = [1; BinaryChunk::BITS as usize];
-        v[0..8].copy_from_slice(&[1, 2, -3, -4, 5, 6, -7, -8]);
-        let w = [0b10110000];
-        assert_eq!(hamming_distance_integer(&w, &v), 5);
     }
 
     #[test]
