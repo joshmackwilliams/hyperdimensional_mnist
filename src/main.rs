@@ -13,8 +13,8 @@ fn main() {
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
     let batch_size = 64;
-    //let n_chunks = 156; // Dimensionality of the model / 32
-    let n_chunks = 16; // Small dimensionality used for testing
+    let n_chunks = 78; // Dimensionality of the model / <chunk size>
+    //let n_chunks = 16; // Small dimensionality used for testing
     let n_examples = 60000; // Number of training examples to load
     let mut rng = SmallRng::seed_from_u64(0);
 
@@ -37,7 +37,7 @@ fn main() {
     print!("Initializing model... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let model = UntrainedIntegerHDModel::new(n_chunks, image_area, 256, 10, &mut rng);
+    let model = UntrainedIntegerHDModel::new(n_chunks, image_area, 10, 10, &mut rng);
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Encode the training images using the model

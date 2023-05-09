@@ -5,10 +5,8 @@ pub type BinaryChunk = u64;
 pub type Integer = i16;
 
 pub struct UntrainedIntegerHDModel {
-    // Binary-valued quanta vectors
-    quanta_vectors: Vec<BinaryChunk>,
-    // Binary-valued feature vectors
-    feature_vectors: Vec<BinaryChunk>,
+    // Binary-valued feature x quanta vectors
+    feature_quanta_vectors: Vec<BinaryChunk>,
     // Number of chunks in the model's feature vectors (actual dimensionality / binary chunk size)
     model_dimensionality_chunks: usize,
     // The actual model dimensionality
@@ -17,6 +15,8 @@ pub struct UntrainedIntegerHDModel {
     input_dimensionality: usize,
     // Number of class vectors computed by the model
     n_classes: usize,
+    // Number of quanta for each feature
+    input_quanta: usize,
 }
 
 impl UntrainedIntegerHDModel {
@@ -32,35 +32,45 @@ impl UntrainedIntegerHDModel {
         let model_dimensionality = model_dimensionality_chunks * BinaryChunk::BITS as usize;
 
         // Allocate space for quanta vectors
-        let mut quanta_vectors: Vec<BinaryChunk> =
-            Vec::with_capacity(model_dimensionality_chunks * input_quanta);
+        let mut feature_quanta_vectors: Vec<BinaryChunk> =
+            Vec::with_capacity(input_dimensionality * input_quanta * model_dimensionality_chunks);
 
-        // Randomly generate the first quantum vector
-        quanta_vectors.extend((0..model_dimensionality_chunks).map(|_| rng.gen::<BinaryChunk>()));
+        for feature in 0..input_dimensionality {
+            let feature_offset_chunks = feature * input_quanta * model_dimensionality_chunks;
 
-        // Randomly order some bits to flip
-        let mut order_to_flip: Vec<usize> = (0..model_dimensionality).collect();
-        order_to_flip.shuffle(rng);
-        let flip_per_quantum = model_dimensionality / 2 / (input_quanta - 1);
+            // Randomly generate the first quantum vector
+            feature_quanta_vectors
+                .extend((0..model_dimensionality_chunks).map(|_| rng.gen::<BinaryChunk>()));
 
-        // Make a vector for each quanta
-        for quantum in 1..input_quanta {
-            // Some useful values
-            let previous_quantum = quantum - 1;
-            let quantum_offset_chunks = quantum * model_dimensionality_chunks;
-            let previous_quantum_offset_chunks = previous_quantum * model_dimensionality_chunks;
+            // Randomly order some bits to flip
+            let mut order_to_flip: Vec<usize> = (0..model_dimensionality).collect();
+            order_to_flip.shuffle(rng);
+            let flip_per_quantum = model_dimensionality / 2 / (input_quanta - 1);
 
-            // Copy the previous quanta
-            for i in 0..model_dimensionality_chunks {
-                quanta_vectors.push(quanta_vectors[previous_quantum_offset_chunks + i]);
-            }
+            // Make a vector for each quanta
+            for quantum in 1..input_quanta {
+                // Some useful values
+                let previous_quantum = quantum - 1;
+                let quantum_offset_chunks = quantum * model_dimensionality_chunks;
+                let previous_quantum_offset_chunks = previous_quantum * model_dimensionality_chunks;
 
-            // Flip some bits
-            for i in 0..flip_per_quantum {
-                let index_to_flip = order_to_flip[i + (quantum - 1) * flip_per_quantum];
-                let chunk_to_flip = index_to_flip / BinaryChunk::BITS as usize;
-                let bit_to_flip = index_to_flip % BinaryChunk::BITS as usize;
-                quanta_vectors[quantum_offset_chunks + chunk_to_flip] ^= 1 << bit_to_flip;
+                // Copy the previous quanta
+                for i in 0..model_dimensionality_chunks {
+                    feature_quanta_vectors.push(
+                        feature_quanta_vectors
+                            [feature_offset_chunks + previous_quantum_offset_chunks + i],
+                    );
+                }
+
+                // Flip some bits
+                for i in 0..flip_per_quantum {
+                    let index_to_flip = order_to_flip[i + (quantum - 1) * flip_per_quantum];
+                    let chunk_to_flip = index_to_flip / BinaryChunk::BITS as usize;
+                    let bit_to_flip = index_to_flip % BinaryChunk::BITS as usize;
+                    feature_quanta_vectors
+                        [feature_offset_chunks + quantum_offset_chunks + chunk_to_flip] ^=
+                        1 << bit_to_flip;
+                }
             }
         }
 
@@ -72,12 +82,12 @@ impl UntrainedIntegerHDModel {
         });
 
         UntrainedIntegerHDModel {
-            quanta_vectors,
-            feature_vectors,
+            feature_quanta_vectors,
             model_dimensionality_chunks,
             model_dimensionality,
             input_dimensionality,
             n_classes,
+            input_quanta,
         }
     }
 
@@ -101,13 +111,13 @@ impl UntrainedIntegerHDModel {
                         [0; BinaryChunk::BITS as usize];
                     // Compute this chunk of the feature vector for each pixel
                     image.iter().enumerate().for_each(|(i, value)| {
-                        // The vector for a pixel is the position XOR the value
-                        let xored_chunk = self.feature_vectors
-                            [i * self.model_dimensionality_chunks + chunk_index]
-                            ^ self.quanta_vectors
-                                [*value * self.model_dimensionality_chunks + chunk_index];
+                        let chunk = self.feature_quanta_vectors[(i
+                            * self.input_quanta
+                            * self.model_dimensionality_chunks)
+                            + (value * self.model_dimensionality_chunks)
+                            + chunk_index];
                         // Separate out each bit and count it
-                        count_bits_unsigned(xored_chunk, &mut counts);
+                        count_bits_unsigned(chunk, &mut counts);
                     });
                     // Condense our list of counts into a binarized bhunk and add it to the output
                     *chunk = binarize_unsigned_chunk(&counts, threshold);
@@ -141,6 +151,59 @@ impl UntrainedIntegerHDModel {
                         model.class_vectors[label_index].saturating_add(bit_as_integer(example, i));
                 }
             });
+
+        // Pre integer training step
+        let mut epoch: usize = 0;
+        let mut best = 0_usize;
+        let mut epochs_since_improvement = 0;
+        let mut predictions = vec![0_usize; batch_size];
+        while epochs_since_improvement < 5 {
+            let mut correct = 0_usize;
+            for (batch, batch_labels) in examples
+                .chunks(model.untrained_model.model_dimensionality_chunks * batch_size)
+                .zip(labels.chunks(batch_size))
+            {
+                predictions
+                    .par_iter_mut()
+                    .zip(batch.par_chunks(model.untrained_model.model_dimensionality_chunks))
+                    .for_each(|(prediction, example)| {
+                        *prediction = model.classify(example);
+                    });
+
+                batch
+                    .chunks(model.untrained_model.model_dimensionality_chunks)
+                    .zip(batch_labels.iter())
+                    .zip(predictions.iter())
+                    .for_each(|((example, &label), &predicted)| {
+                        if predicted != label {
+                            for i in 0..model.untrained_model.model_dimensionality {
+                                let bit = bit_as_integer(example, i);
+                                let label_index =
+                                    i + (label * model.untrained_model.model_dimensionality);
+                                model.class_vectors[label_index] =
+                                    model.class_vectors[label_index].saturating_add(bit);
+                                let predicted_index =
+                                    i + (predicted * model.untrained_model.model_dimensionality);
+                                model.class_vectors[predicted_index] =
+                                    model.class_vectors[predicted_index].saturating_sub(bit);
+                            }
+                        } else {
+                            correct += 1;
+                        }
+                    });
+            }
+            println!(
+                "[Integer retraining] Correct examples at epoch {}: {}",
+                epoch, correct
+            );
+            if correct > best {
+                epochs_since_improvement = 0;
+                best = correct;
+            } else {
+                epochs_since_improvement += 1;
+            }
+            epoch += 1;
+        }
 
         let mut epoch: usize = 0;
         let mut best = 0_usize;
@@ -291,8 +354,8 @@ pub fn hamming_distance_integer(binary_vector: &[BinaryChunk], integer_vector: &
         let chunk_offset = chunk_index * BinaryChunk::BITS as usize;
         for bit_index in 0..BinaryChunk::BITS as usize {
             let integer_value = integer_vector[chunk_offset + bit_index];
-            count += (((integer_value >> Integer::BITS - 1) as BinaryChunk
-                ^ (chunk >> bit_index)) & 1) as u32;
+            count += (((integer_value >> Integer::BITS - 1) as BinaryChunk ^ (chunk >> bit_index))
+                & 1) as u32;
         }
     }
     count
