@@ -4,7 +4,7 @@ use rayon::prelude::*;
 pub type BinaryChunk = u64;
 pub type Integer = i16;
 
-pub struct UntrainedIntegerHDModel {
+pub struct UntrainedHDModel {
     // Binary-valued feature x quanta vectors
     feature_quanta_vectors: Vec<BinaryChunk>,
     // Number of chunks in the model's feature vectors (actual dimensionality / binary chunk size)
@@ -19,7 +19,7 @@ pub struct UntrainedIntegerHDModel {
     input_quanta: usize,
 }
 
-impl UntrainedIntegerHDModel {
+impl UntrainedHDModel {
     pub fn new(
         model_dimensionality_chunks: usize,
         input_dimensionality: usize,
@@ -81,7 +81,7 @@ impl UntrainedIntegerHDModel {
             rng.gen::<BinaryChunk>()
         });
 
-        UntrainedIntegerHDModel {
+        UntrainedHDModel {
             feature_quanta_vectors,
             model_dimensionality_chunks,
             model_dimensionality,
@@ -95,115 +95,54 @@ impl UntrainedIntegerHDModel {
     pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
         // Preallocate the output space
         let mut output = vec![0 as BinaryChunk; input.len() * self.model_dimensionality_chunks];
-        // threshold = half the input dimensionality
-        // This serves as the threshold for the majority function that we use on images
-        let threshold = self.input_dimensionality as u32 >> 1;
         output
             // Compute one image vector at a time
             .par_chunks_mut(self.model_dimensionality_chunks)
             // Pair each vector with the corresponding image
             .zip(input.into_par_iter())
-            .for_each(|(output, image)| {
-                // We'll do this chunk-by-chunk - handling fixed-size chunks makes things easier
-                for (chunk_index, chunk) in output.iter_mut().enumerate() {
-                    // Temporary stack-based scratch space for our majority function
-                    let mut counts: [u32; BinaryChunk::BITS as usize] =
-                        [0; BinaryChunk::BITS as usize];
-                    // Compute this chunk of the feature vector for each pixel
-                    image.iter().enumerate().for_each(|(i, value)| {
-                        let chunk = self.feature_quanta_vectors[(i
-                            * self.input_quanta
-                            * self.model_dimensionality_chunks)
-                            + (value * self.model_dimensionality_chunks)
-                            + chunk_index];
-                        // Separate out each bit and count it
-                        count_bits_unsigned(chunk, &mut counts);
-                    });
-                    // Condense our list of counts into a binarized bhunk and add it to the output
-                    *chunk = binarize_unsigned_chunk(&counts, threshold);
-                }
-            });
+            .for_each_with(
+                Vec::with_capacity(self.input_dimensionality),
+                |chunks: &mut Vec<BinaryChunk>, (output, image)| {
+                    for (chunk_index, chunk) in output.iter_mut().enumerate() {
+                        chunks.clear();
+                        chunks.extend(image.iter().enumerate().map(|(feature, &value)| {
+                            self.feature_quanta_vectors[(feature
+                                * self.input_quanta
+                                * self.model_dimensionality_chunks)
+                                + (value * self.model_dimensionality_chunks)
+                                + chunk_index]
+                        }));
+                        *chunk = fast_approx_majority(chunks);
+                    }
+                },
+            );
         output
     }
 
-    pub fn train(
-        self,
-        examples: &[BinaryChunk],
-        labels: &[usize],
-        batch_size: usize,
-    ) -> IntegerHDModel {
+    pub fn train(self, examples: &[BinaryChunk], labels: &[usize]) -> HDModel {
         // Allocate space for integer-valued class vectors
-        let class_vectors = vec![0 as Integer; self.n_classes * self.model_dimensionality];
-
-        let mut model = IntegerHDModel {
-            untrained_model: self,
-            class_vectors,
-            binary_class_vectors: Vec::new(),
-        };
+        let mut class_vectors = vec![0 as Integer; self.n_classes * self.model_dimensionality];
 
         examples
-            .chunks(model.untrained_model.model_dimensionality_chunks)
+            .chunks(self.model_dimensionality_chunks)
             .zip(labels.iter())
             .for_each(|(example, &label)| {
-                for i in 0..model.untrained_model.model_dimensionality {
-                    let label_index = i + (label * model.untrained_model.model_dimensionality);
-                    model.class_vectors[label_index] =
-                        model.class_vectors[label_index].saturating_add(bit_as_integer(example, i));
+                for i in 0..self.model_dimensionality {
+                    let label_index = i + (label * self.model_dimensionality);
+                    class_vectors[label_index] =
+                        class_vectors[label_index].saturating_add(bit_as_integer(example, i));
                 }
             });
 
-        // Pre integer training step
-        let mut epoch: usize = 0;
-        let mut best = 0_usize;
-        let mut epochs_since_improvement = 0;
-        let mut predictions = vec![0_usize; batch_size];
-        while epochs_since_improvement < 5 {
-            let mut correct = 0_usize;
-            for (batch, batch_labels) in examples
-                .chunks(model.untrained_model.model_dimensionality_chunks * batch_size)
-                .zip(labels.chunks(batch_size))
-            {
-                predictions
-                    .par_iter_mut()
-                    .zip(batch.par_chunks(model.untrained_model.model_dimensionality_chunks))
-                    .for_each(|(prediction, example)| {
-                        *prediction = model.classify(example);
-                    });
+        let n_classes = self.n_classes;
+        let model_dimensionality_chunks = self.model_dimensionality_chunks;
 
-                batch
-                    .chunks(model.untrained_model.model_dimensionality_chunks)
-                    .zip(batch_labels.iter())
-                    .zip(predictions.iter())
-                    .for_each(|((example, &label), &predicted)| {
-                        if predicted != label {
-                            for i in 0..model.untrained_model.model_dimensionality {
-                                let bit = bit_as_integer(example, i);
-                                let label_index =
-                                    i + (label * model.untrained_model.model_dimensionality);
-                                model.class_vectors[label_index] =
-                                    model.class_vectors[label_index].saturating_add(bit);
-                                let predicted_index =
-                                    i + (predicted * model.untrained_model.model_dimensionality);
-                                model.class_vectors[predicted_index] =
-                                    model.class_vectors[predicted_index].saturating_sub(bit);
-                            }
-                        } else {
-                            correct += 1;
-                        }
-                    });
-            }
-            println!(
-                "[Integer retraining] Correct examples at epoch {}: {}",
-                epoch, correct
-            );
-            if correct > best {
-                epochs_since_improvement = 0;
-                best = correct;
-            } else {
-                epochs_since_improvement += 1;
-            }
-            epoch += 1;
-        }
+        let mut model = HDModel {
+            untrained_model: self,
+            binary_class_vectors: vec![0 as BinaryChunk; n_classes * model_dimensionality_chunks],
+        };
+
+        binarize(&class_vectors, &mut model.binary_class_vectors);
 
         let mut epoch: usize = 0;
         let mut best = 0_usize;
@@ -214,83 +153,26 @@ impl UntrainedIntegerHDModel {
                 .chunks(model.untrained_model.model_dimensionality_chunks)
                 .zip(labels.iter())
                 .for_each(|(example, &label)| {
-                    let predicted = model.classify_binary_from_integer(example);
+                    let predicted = model.classify_binary(example);
                     if predicted != label {
                         for i in 0..model.untrained_model.model_dimensionality {
                             let bit = bit_as_integer(example, i);
                             let label_index =
                                 i + (label * model.untrained_model.model_dimensionality);
-                            model.class_vectors[label_index] =
-                                model.class_vectors[label_index].saturating_add(bit);
+                            class_vectors[label_index] =
+                                class_vectors[label_index].saturating_add(bit);
                             let predicted_index =
                                 i + (predicted * model.untrained_model.model_dimensionality);
-                            model.class_vectors[predicted_index] =
-                                model.class_vectors[predicted_index].saturating_sub(bit);
+                            class_vectors[predicted_index] =
+                                class_vectors[predicted_index].saturating_sub(bit);
                         }
+                        binarize(&class_vectors, &mut model.binary_class_vectors);
                     } else {
                         correct += 1;
                     }
                 });
             println!(
-                "[Binary retraining] Correct examples at epoch {}: {}",
-                epoch, correct
-            );
-            if correct > best {
-                epochs_since_improvement = 0;
-                best = correct;
-            } else {
-                epochs_since_improvement += 1;
-            }
-            epoch += 1;
-        }
-
-        model.binary_class_vectors = model
-            .class_vectors
-            .chunks(BinaryChunk::BITS as usize)
-            .map(|x| binarize_signed_chunk(x))
-            .collect();
-
-        let mut epoch: usize = 0;
-        let mut best = 0_usize;
-        let mut epochs_since_improvement = 0;
-        let mut predictions = vec![0_usize; batch_size];
-        while epochs_since_improvement < 5 {
-            let mut correct = 0_usize;
-            for (batch, batch_labels) in examples
-                .chunks(model.untrained_model.model_dimensionality_chunks * batch_size)
-                .zip(labels.chunks(batch_size))
-            {
-                predictions
-                    .par_iter_mut()
-                    .zip(batch.par_chunks(model.untrained_model.model_dimensionality_chunks))
-                    .for_each(|(prediction, example)| {
-                        *prediction = model.classify(example);
-                    });
-
-                batch
-                    .chunks(model.untrained_model.model_dimensionality_chunks)
-                    .zip(batch_labels.iter())
-                    .zip(predictions.iter())
-                    .for_each(|((example, &label), &predicted)| {
-                        if predicted != label {
-                            for i in 0..model.untrained_model.model_dimensionality {
-                                let bit = bit_as_integer(example, i);
-                                let label_index =
-                                    i + (label * model.untrained_model.model_dimensionality);
-                                model.class_vectors[label_index] =
-                                    model.class_vectors[label_index].saturating_add(bit);
-                                let predicted_index =
-                                    i + (predicted * model.untrained_model.model_dimensionality);
-                                model.class_vectors[predicted_index] =
-                                    model.class_vectors[predicted_index].saturating_sub(bit);
-                            }
-                        } else {
-                            correct += 1;
-                        }
-                    });
-            }
-            println!(
-                "[Integer retraining] Correct examples at epoch {}: {}",
+                "[Retraining] Correct examples at epoch {}: {}",
                 epoch, correct
             );
             if correct > best {
@@ -306,35 +188,15 @@ impl UntrainedIntegerHDModel {
     }
 }
 
-pub struct IntegerHDModel {
-    untrained_model: UntrainedIntegerHDModel,
-    class_vectors: Vec<Integer>,
+pub struct HDModel {
+    untrained_model: UntrainedHDModel,
     binary_class_vectors: Vec<BinaryChunk>,
 }
 
-impl IntegerHDModel {
+impl HDModel {
     // Encode a batch of images
     pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
         self.untrained_model.encode(input)
-    }
-
-    pub fn classify(&self, input: &[BinaryChunk]) -> usize {
-        self.class_vectors
-            .chunks(self.untrained_model.model_dimensionality)
-            .map(|x| square_cosine_similarity(input, x))
-            .enumerate()
-            .max_by(|(_, x), (_, y)| x.partial_cmp(y).unwrap())
-            .unwrap()
-            .0
-    }
-
-    fn classify_binary_from_integer(&self, input: &[BinaryChunk]) -> usize {
-        self.class_vectors
-            .chunks(self.untrained_model.model_dimensionality)
-            .enumerate()
-            .min_by_key(|(_, x)| hamming_distance_integer(input, x))
-            .unwrap()
-            .0
     }
 
     pub fn classify_binary(&self, input: &[BinaryChunk]) -> usize {
@@ -345,6 +207,17 @@ impl IntegerHDModel {
             .unwrap()
             .0
     }
+}
+
+fn binarize(input: &[Integer], target: &mut [BinaryChunk]) {
+    target
+        .iter_mut()
+        .zip(
+            input
+                .chunks(BinaryChunk::BITS as usize)
+                .map(|x| binarize_signed_chunk(x)),
+        )
+        .for_each(|(x, y)| *x = y);
 }
 
 // Treat an integer vector as binary and compute the hamming distance
@@ -368,31 +241,12 @@ pub fn hamming_distance(a: &[BinaryChunk], b: &[BinaryChunk]) -> u32 {
         .sum()
 }
 
-// Majority function, operating on a list of counts and a threshold
-// - counts[i] holds the number of examples in which bit i was set
-// - threshold is set to half the number of examples
-// - returns the inverse result of applying the majority function
-fn binarize_unsigned_chunk(counts: &[u32], threshold: u32) -> BinaryChunk {
-    let mut output = 0;
-    for (bit, &count) in counts.iter().enumerate() {
-        output |= ((count < threshold) as BinaryChunk) << bit;
-    }
-    output
-}
-
 fn binarize_signed_chunk(chunk: &[Integer]) -> BinaryChunk {
     let mut output = 0;
     for (bit, &value) in chunk.iter().enumerate() {
         output |= (((value >> (Integer::BITS - 1)) & 1) as BinaryChunk) << bit;
     }
     output
-}
-
-// Given a binarized chunk, separate each bit out and add it to an array of counts
-fn count_bits_unsigned(chunk: BinaryChunk, counts: &mut [u32]) {
-    for (bit, count) in counts.iter_mut().enumerate() {
-        *count += (chunk >> (BinaryChunk::BITS as usize - 1 - bit) & 1) as u32;
-    }
 }
 
 // Compute the magnitude of an integer vector
@@ -436,6 +290,18 @@ fn bit_as_integer(chunks: &[BinaryChunk], bit_index: usize) -> Integer {
     let chunk = chunks[bit_index / BinaryChunk::BITS as usize];
     let bit = bit_index % BinaryChunk::BITS as usize;
     (((chunk >> bit) & 1) as Integer) * -2 + 1
+}
+
+fn fast_approx_majority(chunks: &[BinaryChunk]) -> BinaryChunk {
+    if chunks.len() == 1 {
+        return chunks[0];
+    }
+    let one_third_ceil = (chunks.len() + 2) / 3;
+    let one_third_floor = chunks.len() / 3;
+    let a = fast_approx_majority(&chunks[..one_third_ceil]);
+    let b = fast_approx_majority(&chunks[one_third_floor..(one_third_floor + one_third_ceil)]);
+    let c = fast_approx_majority(&chunks[(chunks.len() - one_third_ceil)..]);
+    return (a & b) | (b & c) | (c & a);
 }
 
 #[cfg(test)]

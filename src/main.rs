@@ -5,14 +5,13 @@ use rand::{rngs::SmallRng, SeedableRng};
 use std::io::{self, Write};
 use std::time::Instant;
 
-use hd_vsa_mnist::integer::UntrainedIntegerHDModel;
+use hd_vsa_mnist::hd_model::UntrainedHDModel;
 use hd_vsa_mnist::mnist::load_mnist;
 
 fn main() {
     // TODO make this stuff CLI args
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
-    let batch_size = 64;
     let n_chunks = 78; // Dimensionality of the model / <chunk size>
     //let n_chunks = 16; // Small dimensionality used for testing
     let n_examples = 60000; // Number of training examples to load
@@ -37,7 +36,7 @@ fn main() {
     print!("Initializing model... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let model = UntrainedIntegerHDModel::new(n_chunks, image_area, 10, 10, &mut rng);
+    let model = UntrainedHDModel::new(n_chunks, image_area, 10, 10, &mut rng);
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Encode the training images using the model
@@ -51,7 +50,7 @@ fn main() {
     println!("=== Training model ===");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let model = model.train(&train_x, &train_y, batch_size);
+    let model = model.train(&train_x, &train_y);
     println!("=== Done [{}ms] ===", now.elapsed().as_millis());
 
     // Load the test data
@@ -72,20 +71,6 @@ fn main() {
     let now = Instant::now();
     let test_x = model.encode(&test_images);
     println!("Done [{}ms]", now.elapsed().as_millis());
-
-    // Classify the test data and compute accuracy
-    print!("Testing integer classifier... ");
-    let _ = io::stdout().flush();
-    let now = Instant::now();
-    let mut correct = 0;
-    for (x, y) in test_x.chunks(test_x.len() / test_images.len()).zip(&test_y) {
-        let class = model.classify(x);
-        if class == *y {
-            correct += 1;
-        }
-    }
-    let acc = correct as f64 / test_images.len() as f64;
-    println!("Done - Accuracy = {} [{}ms]", acc, now.elapsed().as_millis());
 
     // Similarly, test the binary classifier
     print!("Testing binary classifier... ");
