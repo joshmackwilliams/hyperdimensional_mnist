@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 rand = { version = "0.8", features = ["small_rng"] }
 csv = "1.2"
-ndarray = { version = "0.15", features = ["rayon"] }
 rayon = "1.7"
 
 [profile.dev]
