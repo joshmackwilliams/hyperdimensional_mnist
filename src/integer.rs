@@ -2,6 +2,7 @@ use rand::{prelude::SliceRandom, Rng};
 use rayon::prelude::*;
 
 pub type BinaryChunk = u64;
+pub type Integer = i16;
 
 pub struct UntrainedIntegerHDModel {
     // Binary-valued quanta vectors
@@ -122,7 +123,7 @@ impl UntrainedIntegerHDModel {
         batch_size: usize,
     ) -> IntegerHDModel {
         // Allocate space for integer-valued class vectors
-        let class_vectors = vec![0_i32; self.n_classes * self.model_dimensionality];
+        let class_vectors = vec![0 as Integer; self.n_classes * self.model_dimensionality];
 
         let mut model = IntegerHDModel {
             untrained_model: self,
@@ -135,9 +136,9 @@ impl UntrainedIntegerHDModel {
             .zip(labels.iter())
             .for_each(|(example, &label)| {
                 for i in 0..model.untrained_model.model_dimensionality {
-                    model.class_vectors
-                        [i + (label * model.untrained_model.model_dimensionality)] +=
-                        bit_as_i32(example, i);
+                    let label_index = i + (label * model.untrained_model.model_dimensionality);
+                    model.class_vectors[label_index] =
+                        model.class_vectors[label_index].saturating_add(bit_as_integer(example, i));
                 }
             });
 
@@ -153,12 +154,15 @@ impl UntrainedIntegerHDModel {
                     let predicted = model.classify_binary_from_integer(example);
                     if predicted != label {
                         for i in 0..model.untrained_model.model_dimensionality {
-                            let bit = bit_as_i32(example, i);
-                            model.class_vectors
-                                [i + (label * model.untrained_model.model_dimensionality)] += bit;
-                            model.class_vectors
-                                [i + (predicted * model.untrained_model.model_dimensionality)] -=
-                                bit;
+                            let bit = bit_as_integer(example, i);
+                            let label_index =
+                                i + (label * model.untrained_model.model_dimensionality);
+                            model.class_vectors[label_index] =
+                                model.class_vectors[label_index].saturating_add(bit);
+                            let predicted_index =
+                                i + (predicted * model.untrained_model.model_dimensionality);
+                            model.class_vectors[predicted_index] =
+                                model.class_vectors[predicted_index].saturating_sub(bit);
                         }
                     } else {
                         correct += 1;
@@ -205,16 +209,17 @@ impl UntrainedIntegerHDModel {
                     .zip(batch_labels.iter())
                     .zip(predictions.iter())
                     .for_each(|((example, &label), &predicted)| {
-                        //let predicted = model.classify_binary_from_integer(example);
                         if predicted != label {
                             for i in 0..model.untrained_model.model_dimensionality {
-                                let bit = bit_as_i32(example, i);
-                                model.class_vectors
-                                    [i + (label * model.untrained_model.model_dimensionality)] +=
-                                    bit;
-                                model.class_vectors[i
-                                    + (predicted * model.untrained_model.model_dimensionality)] -=
-                                    bit;
+                                let bit = bit_as_integer(example, i);
+                                let label_index =
+                                    i + (label * model.untrained_model.model_dimensionality);
+                                model.class_vectors[label_index] =
+                                    model.class_vectors[label_index].saturating_add(bit);
+                                let predicted_index =
+                                    i + (predicted * model.untrained_model.model_dimensionality);
+                                model.class_vectors[predicted_index] =
+                                    model.class_vectors[predicted_index].saturating_sub(bit);
                             }
                         } else {
                             correct += 1;
@@ -240,7 +245,7 @@ impl UntrainedIntegerHDModel {
 
 pub struct IntegerHDModel {
     untrained_model: UntrainedIntegerHDModel,
-    class_vectors: Vec<i32>,
+    class_vectors: Vec<Integer>,
     binary_class_vectors: Vec<BinaryChunk>,
 }
 
@@ -280,13 +285,14 @@ impl IntegerHDModel {
 }
 
 // Treat an integer vector as binary and compute the hamming distance
-pub fn hamming_distance_integer(binary_vector: &[BinaryChunk], integer_vector: &[i32]) -> u32 {
+pub fn hamming_distance_integer(binary_vector: &[BinaryChunk], integer_vector: &[Integer]) -> u32 {
     let mut count = 0;
     for (chunk_index, &chunk) in binary_vector.iter().enumerate() {
         let chunk_offset = chunk_index * BinaryChunk::BITS as usize;
         for bit_index in 0..BinaryChunk::BITS as usize {
             let integer_value = integer_vector[chunk_offset + bit_index];
-            count += ((((integer_value as BinaryChunk) >> 31) ^ (chunk >> bit_index)) & 1) as u32;
+            count += (((integer_value >> Integer::BITS - 1) as BinaryChunk
+                ^ (chunk >> bit_index)) & 1) as u32;
         }
     }
     count
@@ -311,11 +317,10 @@ fn binarize_unsigned_chunk(counts: &[u32], threshold: u32) -> BinaryChunk {
     output
 }
 
-fn binarize_signed_chunk(chunk: &[i32]) -> BinaryChunk {
-    let mut output = (chunk[0] & (1 << 31)) as BinaryChunk;
-    for &element in chunk.iter().skip(1) {
-        output >>= 1;
-        output |= (element as BinaryChunk) & (1 << (BinaryChunk::BITS - 1));
+fn binarize_signed_chunk(chunk: &[Integer]) -> BinaryChunk {
+    let mut output = 0;
+    for (bit, &value) in chunk.iter().enumerate() {
+        output |= (((value >> (Integer::BITS - 1)) & 1) as BinaryChunk) << bit;
     }
     output
 }
@@ -328,12 +333,17 @@ fn count_bits_unsigned(chunk: BinaryChunk, counts: &mut [u32]) {
 }
 
 // Compute the magnitude of an integer vector
-fn square_magnitude(a: &[i32]) -> i64 {
-    a.iter().map(|x| (x * x) as i64).sum::<i64>()
+fn square_magnitude(a: &[Integer]) -> i64 {
+    a.iter()
+        .map(|&x| {
+            let x = x as i64;
+            x * x
+        })
+        .sum::<i64>()
 }
 
 // Compute the dot product of an integer vector with a binary vector
-fn dot(binary_vec: &[BinaryChunk], integer_vec: &[i32]) -> i64 {
+fn dot(binary_vec: &[BinaryChunk], integer_vec: &[Integer]) -> i64 {
     let mut sum: i64 = 0;
 
     // Iterate over the chunks
@@ -343,8 +353,8 @@ fn dot(binary_vec: &[BinaryChunk], integer_vec: &[i32]) -> i64 {
         for bit_index in 0..BinaryChunk::BITS as usize {
             // Grab the value of this feature from the integer vector
             let feature_value = integer_vec[bit_index + chunk_bit_offset];
-            let multiplier = ((chunk >> bit_index) & 1) as i32 * -2 + 1;
-            sum += (feature_value * multiplier) as i64;
+            let multiplier = ((chunk >> bit_index) & 1) as i64 * -2 + 1;
+            sum += feature_value as i64 * multiplier;
         }
     }
 
@@ -352,17 +362,17 @@ fn dot(binary_vec: &[BinaryChunk], integer_vec: &[i32]) -> i64 {
 }
 
 // Compute cosine similarity between and integer vector and a binary vector
-pub fn square_cosine_similarity(a: &[BinaryChunk], b: &[i32]) -> f64 {
+pub fn square_cosine_similarity(a: &[BinaryChunk], b: &[Integer]) -> f64 {
     let d = dot(a, b);
     //(d * d * d.signum()) / (square_magnitude(b) / 16)
     (d as f64) / (square_magnitude(b) as f64).sqrt()
 }
 
 // Utility function to get a bit from a vector as -1 or 1
-fn bit_as_i32(chunks: &[BinaryChunk], bit_index: usize) -> i32 {
+fn bit_as_integer(chunks: &[BinaryChunk], bit_index: usize) -> Integer {
     let chunk = chunks[bit_index / BinaryChunk::BITS as usize];
     let bit = bit_index % BinaryChunk::BITS as usize;
-    (((chunk >> bit) & 1) as i32) * -2 + 1
+    (((chunk >> bit) & 1) as Integer) * -2 + 1
 }
 
 #[cfg(test)]
@@ -372,9 +382,9 @@ mod tests {
     #[test]
     fn test_bit_as_i32() {
         let v = [0b10101010101010101010101010101010 as BinaryChunk];
-        assert_eq!(bit_as_i32(&v, 3), -1);
-        assert_eq!(bit_as_i32(&v, 4), 1);
-        assert_eq!(bit_as_i32(&v, 0), 1);
+        assert_eq!(bit_as_integer(&v, 3), -1);
+        assert_eq!(bit_as_integer(&v, 4), 1);
+        assert_eq!(bit_as_integer(&v, 0), 1);
     }
 
     #[test]
