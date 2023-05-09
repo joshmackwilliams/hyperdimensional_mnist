@@ -12,9 +12,9 @@ fn main() {
     // TODO make this stuff CLI args
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
-    let n_chunks = 78; // Dimensionality of the model / <chunk size>
-    //let n_chunks = 16; // Small dimensionality used for testing
-    let n_examples = 60000; // Number of training examples to load
+    let dimensionality = 5000; // Number of bits in the model
+    let n_examples = 24000; // Turns out that this value pretty much maxes out the model
+    
     let mut rng = SmallRng::seed_from_u64(0);
 
     // Load the dataset - raw images and labels, no vectorization
@@ -36,7 +36,7 @@ fn main() {
     print!("Initializing model... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let model = UntrainedHDModel::new(n_chunks, image_area, 10, 10, &mut rng);
+    let model = UntrainedHDModel::new(dimensionality, image_area, 10, 10, &mut rng);
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Encode the training images using the model
@@ -78,7 +78,7 @@ fn main() {
     let now = Instant::now();
     let mut correct = 0;
     for (x, y) in test_x.chunks(test_x.len() / test_images.len()).zip(&test_y) {
-        let class = model.classify_binary(x);
+        let class = model.classify(x);
         if class == *y {
             correct += 1;
         }

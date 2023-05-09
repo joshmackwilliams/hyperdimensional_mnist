@@ -1,5 +1,7 @@
 // Load MNIST images from a csv file.
 // Returns a tuple of (images, labels)
+// Currently quantizes the images to 10 intensity levels
+// TODO: make quantization a separate function, or at least a parameter
 // The expected format is:
 // - No headers
 // - One image per row

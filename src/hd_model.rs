@@ -1,16 +1,15 @@
 use rand::{prelude::SliceRandom, Rng};
 use rayon::prelude::*;
 
-pub type BinaryChunk = u64;
-pub type Integer = i16;
+use super::BinaryChunk;
+use super::counting_binary_vector::CountingBinaryVector;
 
+// Separating the untrained version allows us to encode training data before actually training
 pub struct UntrainedHDModel {
     // Binary-valued feature x quanta vectors
     feature_quanta_vectors: Vec<BinaryChunk>,
     // Number of chunks in the model's feature vectors (actual dimensionality / binary chunk size)
     model_dimensionality_chunks: usize,
-    // The actual model dimensionality
-    model_dimensionality: usize,
     // Number of features in each input example
     input_dimensionality: usize,
     // Number of class vectors computed by the model
@@ -21,13 +20,16 @@ pub struct UntrainedHDModel {
 
 impl UntrainedHDModel {
     pub fn new(
-        model_dimensionality_chunks: usize,
+        model_dimensionality: usize,
         input_dimensionality: usize,
         input_quanta: usize,
         n_classes: usize,
-        // RNG for model initialization
+        // RNG for feature vector
         rng: &mut impl Rng,
     ) -> Self {
+        // Compute model dimensionality in chunks by taking the ceiling of the model dimensionality / chunk size
+        let model_dimensionality_chunks =
+            (model_dimensionality + BinaryChunk::BITS as usize - 1) / BinaryChunk::BITS as usize;
         // Compute the actual model dimensionality
         let model_dimensionality = model_dimensionality_chunks * BinaryChunk::BITS as usize;
 
@@ -84,14 +86,13 @@ impl UntrainedHDModel {
         UntrainedHDModel {
             feature_quanta_vectors,
             model_dimensionality_chunks,
-            model_dimensionality,
             input_dimensionality,
             n_classes,
             input_quanta,
         }
     }
 
-    // Encode a batch of images
+    // Encode a batch of images (multithreaded)
     pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
         // Preallocate the output space
         let mut output = vec![0 as BinaryChunk; input.len() * self.model_dimensionality_chunks];
@@ -106,12 +107,14 @@ impl UntrainedHDModel {
                     for (chunk_index, chunk) in output.iter_mut().enumerate() {
                         chunks.clear();
                         chunks.extend(image.iter().enumerate().map(|(feature, &value)| {
-                            self.feature_quanta_vectors[(feature
-                                * self.input_quanta
+                            self.feature_quanta_vectors[((feature * self.input_quanta + value)
                                 * self.model_dimensionality_chunks)
-                                + (value * self.model_dimensionality_chunks)
                                 + chunk_index]
                         }));
+
+                        // For some reason, using fast_approx_majority gives better accuracy than the exact majority function
+                        // TODO investigate why
+                        // I've tried adding noise to the exact function but it doesn't match fast_approx_majority
                         *chunk = fast_approx_majority(chunks);
                     }
                 },
@@ -119,65 +122,58 @@ impl UntrainedHDModel {
         output
     }
 
+    // Consume self and return a trained model, which can be used to classify examples
     pub fn train(self, examples: &[BinaryChunk], labels: &[usize]) -> HDModel {
         // Allocate space for integer-valued class vectors
-        let mut class_vectors = vec![0 as Integer; self.n_classes * self.model_dimensionality];
+        let mut class_vectors =
+            vec![CountingBinaryVector::new(self.model_dimensionality_chunks); self.n_classes];
 
+        // Compute initial class vectors
         examples
             .chunks(self.model_dimensionality_chunks)
             .zip(labels.iter())
             .for_each(|(example, &label)| {
-                for i in 0..self.model_dimensionality {
-                    let label_index = i + (label * self.model_dimensionality);
-                    class_vectors[label_index] =
-                        class_vectors[label_index].saturating_add(bit_as_integer(example, i));
-                }
+                class_vectors[label].add(example);
             });
 
-        let n_classes = self.n_classes;
-        let model_dimensionality_chunks = self.model_dimensionality_chunks;
-
+        // Initialize a model so we can classify examples during retraining
         let mut model = HDModel {
             untrained_model: self,
-            binary_class_vectors: vec![0 as BinaryChunk; n_classes * model_dimensionality_chunks],
+            class_vectors,
         };
 
-        binarize(&class_vectors, &mut model.binary_class_vectors);
-
+        // Retraining step greatly improves accuracy
+        // We keep running until there's no improvement for five epochs
+        // TODO think about how to parallelize this
+        // I've tried batching, but the binary model seems brittle in that case
         let mut epoch: usize = 0;
-        let mut best = 0_usize;
+        let mut best = usize::MAX;
         let mut epochs_since_improvement = 0;
         while epochs_since_improvement < 5 {
-            let mut correct = 0_usize;
+            let mut missed = 0_usize;
+
+            // Classify each example
             examples
                 .chunks(model.untrained_model.model_dimensionality_chunks)
                 .zip(labels.iter())
                 .for_each(|(example, &label)| {
-                    let predicted = model.classify_binary(example);
+                    let predicted = model.classify(example);
+
+                    // If we get it wrong, reinforce the involved class vectors
                     if predicted != label {
-                        for i in 0..model.untrained_model.model_dimensionality {
-                            let bit = bit_as_integer(example, i);
-                            let label_index =
-                                i + (label * model.untrained_model.model_dimensionality);
-                            class_vectors[label_index] =
-                                class_vectors[label_index].saturating_add(bit);
-                            let predicted_index =
-                                i + (predicted * model.untrained_model.model_dimensionality);
-                            class_vectors[predicted_index] =
-                                class_vectors[predicted_index].saturating_sub(bit);
-                        }
-                        binarize(&class_vectors, &mut model.binary_class_vectors);
-                    } else {
-                        correct += 1;
+                        model.class_vectors[label].add(example);
+                        model.class_vectors[predicted].subtract(example);
+                        missed += 1;
                     }
                 });
-            println!(
-                "[Retraining] Correct examples at epoch {}: {}",
-                epoch, correct
-            );
-            if correct > best {
+            
+            // Print status
+            println!("[Epoch {}] Misclassified: {}", epoch, missed);
+
+            // Evaluate performance - did we improve on our all time best?
+            if missed < best {
                 epochs_since_improvement = 0;
-                best = correct;
+                best = missed;
             } else {
                 epochs_since_improvement += 1;
             }
@@ -188,52 +184,34 @@ impl UntrainedHDModel {
     }
 }
 
+// Trained version of the model
+// Actually just a wrapper around the untrained model, along with the trained class vectors
+// Note - The counting vectors are included here so that we can keep training online.
+//        This project does no such thing yet, but it could be useful as some point.
+//        Besides, the counting vectors are actually pretty small.
 pub struct HDModel {
     untrained_model: UntrainedHDModel,
-    binary_class_vectors: Vec<BinaryChunk>,
+    class_vectors: Vec<CountingBinaryVector>,
 }
 
 impl HDModel {
-    // Encode a batch of images
+    // Encode a batch of images (wrapper around untrained model)
     pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
         self.untrained_model.encode(input)
     }
 
-    pub fn classify_binary(&self, input: &[BinaryChunk]) -> usize {
-        self.binary_class_vectors
-            .chunks(self.untrained_model.model_dimensionality_chunks)
+    // Classify one example
+    pub fn classify(&self, input: &[BinaryChunk]) -> usize {
+        self.class_vectors
+            .iter()
             .enumerate()
-            .min_by_key(|(_, x)| hamming_distance(input, x))
+            .min_by_key(|(_, x)| hamming_distance(input, x.as_binary()))
             .unwrap()
             .0
     }
 }
 
-fn binarize(input: &[Integer], target: &mut [BinaryChunk]) {
-    target
-        .iter_mut()
-        .zip(
-            input
-                .chunks(BinaryChunk::BITS as usize)
-                .map(|x| binarize_signed_chunk(x)),
-        )
-        .for_each(|(x, y)| *x = y);
-}
-
-// Treat an integer vector as binary and compute the hamming distance
-pub fn hamming_distance_integer(binary_vector: &[BinaryChunk], integer_vector: &[Integer]) -> u32 {
-    let mut count = 0;
-    for (chunk_index, &chunk) in binary_vector.iter().enumerate() {
-        let chunk_offset = chunk_index * BinaryChunk::BITS as usize;
-        for bit_index in 0..BinaryChunk::BITS as usize {
-            let integer_value = integer_vector[chunk_offset + bit_index];
-            count += (((integer_value >> Integer::BITS - 1) as BinaryChunk ^ (chunk >> bit_index))
-                & 1) as u32;
-        }
-    }
-    count
-}
-
+// Utility function - find the hamming distance between two binary vectors
 pub fn hamming_distance(a: &[BinaryChunk], b: &[BinaryChunk]) -> u32 {
     a.iter()
         .zip(b.iter())
@@ -241,23 +219,10 @@ pub fn hamming_distance(a: &[BinaryChunk], b: &[BinaryChunk]) -> u32 {
         .sum()
 }
 
-fn binarize_signed_chunk(chunk: &[Integer]) -> BinaryChunk {
-    let mut output = 0;
-    for (bit, &value) in chunk.iter().enumerate() {
-        output |= (((value >> (Integer::BITS - 1)) & 1) as BinaryChunk) << bit;
-    }
-    output
-}
-
-// Utility function to get a bit from a vector as -1 or 1
-fn bit_as_integer(chunks: &[BinaryChunk], bit_index: usize) -> Integer {
-    let chunk = chunks[bit_index / BinaryChunk::BITS as usize];
-    let bit = bit_index % BinaryChunk::BITS as usize;
-    (((chunk >> bit) & 1) as Integer) * -2 + 1
-}
-
+// Compute the approximate majority of an array of binary chunks
+// TODO think about ways to improve this function
 fn fast_approx_majority(chunks: &[BinaryChunk]) -> BinaryChunk {
-    if chunks.len() == 1 {
+    if chunks.len() < 3 {
         return chunks[0];
     }
     let one_third_ceil = (chunks.len() + 2) / 3;
@@ -266,24 +231,4 @@ fn fast_approx_majority(chunks: &[BinaryChunk]) -> BinaryChunk {
     let b = fast_approx_majority(&chunks[one_third_floor..(one_third_floor + one_third_ceil)]);
     let c = fast_approx_majority(&chunks[(chunks.len() - one_third_ceil)..]);
     return (a & b) | (b & c) | (c & a);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_bit_as_i32() {
-        let v = [0b10101010101010101010101010101010 as BinaryChunk];
-        assert_eq!(bit_as_integer(&v, 3), -1);
-        assert_eq!(bit_as_integer(&v, 4), 1);
-        assert_eq!(bit_as_integer(&v, 0), 1);
-    }
-
-    #[test]
-    pub fn test_binarize_signed_chunk() {
-        let mut v = [1; BinaryChunk::BITS as usize];
-        v[0..8].copy_from_slice(&[1, 2, -3, -4, 5, 6, -7, -8]);
-        assert_eq!(binarize_signed_chunk(&v), 0b11001100);
-    }
 }
