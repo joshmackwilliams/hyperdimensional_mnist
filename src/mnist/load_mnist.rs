@@ -6,7 +6,7 @@
 // - Each row starts with the class label 0-9
 // - The rest of the row consists of 28x28 pixel values
 // - The pixel values are represented as integers, 0-255
-pub fn load_mnist(filename: &str) -> (Vec<Vec<usize>>, Vec<usize>) {
+pub fn load_mnist(filename: &str, n_examples: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
     // Use the CSV crate
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
@@ -26,5 +26,6 @@ pub fn load_mnist(filename: &str) -> (Vec<Vec<usize>>, Vec<usize>) {
                 .collect();
             (image, label)
         })
+        .take(n_examples)
         .unzip()
 }

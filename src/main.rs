@@ -5,22 +5,24 @@ use rand::{rngs::SmallRng, SeedableRng};
 use std::io::{self, Write};
 use std::time::Instant;
 
-use hd_vsa_mnist::integer::{UntrainedIntegerHDModel};
+use hd_vsa_mnist::integer::UntrainedIntegerHDModel;
 use hd_vsa_mnist::mnist::load_mnist;
 
 fn main() {
+    // TODO make this stuff CLI args
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
     let batch_size = 64;
-    let n_chunks = 156; // Dimensionality of the model / 32
-    //let n_chunks = 32; // Small dimensionality used for testing
+    //let n_chunks = 156; // Dimensionality of the model / 32
+    let n_chunks = 32; // Small dimensionality used for testing
+    let n_examples = 60000; // Number of training examples to load
     let mut rng = SmallRng::seed_from_u64(0);
 
     // Load the dataset - raw images and labels, no vectorization
     print!("Loading data... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let (train_images, train_y) = load_mnist(train_filename);
+    let (train_images, train_y) = load_mnist(train_filename, n_examples);
     println!(
         "Loaded {} examples from {} [{}ms]",
         train_images.len(),
@@ -56,7 +58,7 @@ fn main() {
     print!("Loading test data... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let (test_images, test_y) = load_mnist(test_filename);
+    let (test_images, test_y) = load_mnist(test_filename, usize::MAX);
     println!(
         "Loaded {} examples from {} [{}ms]",
         test_images.len(),
