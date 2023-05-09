@@ -1,7 +1,7 @@
 use rand::{prelude::SliceRandom, Rng};
 use rayon::prelude::*;
 
-pub type BinaryChunk = u32;
+pub type BinaryChunk = u64;
 
 pub struct UntrainedIntegerHDModel {
     // Binary-valued quanta vectors
@@ -194,8 +194,8 @@ impl UntrainedIntegerHDModel {
                 .zip(labels.chunks(batch_size))
             {
                 predictions
-                    .iter_mut()
-                    .zip(batch.chunks(model.untrained_model.model_dimensionality_chunks))
+                    .par_iter_mut()
+                    .zip(batch.par_chunks(model.untrained_model.model_dimensionality_chunks))
                     .for_each(|(prediction, example)| {
                         *prediction = model.classify(example);
                     });
@@ -286,7 +286,7 @@ pub fn hamming_distance_integer(binary_vector: &[BinaryChunk], integer_vector: &
         let chunk_offset = chunk_index * BinaryChunk::BITS as usize;
         for bit_index in 0..BinaryChunk::BITS as usize {
             let integer_value = integer_vector[chunk_offset + bit_index];
-            count += (((integer_value as BinaryChunk) >> 31) ^ (chunk >> bit_index)) & 1;
+            count += ((((integer_value as BinaryChunk) >> 31) ^ (chunk >> bit_index)) & 1) as u32;
         }
     }
     count
@@ -323,7 +323,7 @@ fn binarize_signed_chunk(chunk: &[i32]) -> BinaryChunk {
 // Given a binarized chunk, separate each bit out and add it to an array of counts
 fn count_bits_unsigned(chunk: BinaryChunk, counts: &mut [u32]) {
     for (bit, count) in counts.iter_mut().enumerate() {
-        *count += chunk >> (BinaryChunk::BITS as usize - 1 - bit) & 1;
+        *count += (chunk >> (BinaryChunk::BITS as usize - 1 - bit) & 1) as u32;
     }
 }
 

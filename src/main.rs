@@ -14,7 +14,7 @@ fn main() {
     let test_filename = "mnist_test.csv";
     let batch_size = 64;
     //let n_chunks = 156; // Dimensionality of the model / 32
-    let n_chunks = 32; // Small dimensionality used for testing
+    let n_chunks = 16; // Small dimensionality used for testing
     let n_examples = 60000; // Number of training examples to load
     let mut rng = SmallRng::seed_from_u64(0);
 
