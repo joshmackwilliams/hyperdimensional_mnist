@@ -2,8 +2,7 @@ use rand::{prelude::SliceRandom, Rng};
 use rayon::prelude::*;
 
 use super::counting_binary_vector::CountingBinaryVector;
-use super::BinaryChunk;
-use super::CHUNK_SIZE;
+use super::{BinaryChunk, ChunkElement, CHUNK_ELEMENTS, CHUNK_SIZE};
 
 // Separating the untrained version allows us to encode training data before actually training
 pub struct UntrainedHDModel {
@@ -68,9 +67,10 @@ impl UntrainedHDModel {
                 for i in 0..flip_per_quantum {
                     let index_to_flip = order_to_flip[i + (quantum - 1) * flip_per_quantum];
                     let chunk_to_flip = index_to_flip / CHUNK_SIZE;
-                    let element_to_flip = (index_to_flip % CHUNK_SIZE) / usize::BITS as usize;
-                    let bit_to_flip = index_to_flip % usize::BITS as usize;
-                    let m: &mut [usize] = feature_quanta_vectors
+                    let element_to_flip =
+                        (index_to_flip % CHUNK_SIZE) / ChunkElement::BITS as usize;
+                    let bit_to_flip = index_to_flip % ChunkElement::BITS as usize;
+                    let m: &mut [ChunkElement; CHUNK_ELEMENTS] = feature_quanta_vectors
                         [feature_offset_chunks + quantum_offset_chunks + chunk_to_flip]
                         .as_mut();
                     m[element_to_flip] ^= 1 << bit_to_flip;
@@ -237,12 +237,13 @@ fn fast_approx_majority(chunks: &[BinaryChunk]) -> BinaryChunk {
 }
 
 fn count_ones_in_chunk(x: BinaryChunk) -> u32 {
-    let r: &[usize] = x.as_ref();
+    let r: &[ChunkElement; CHUNK_ELEMENTS] = x.as_ref();
     r.iter().map(|x| x.count_ones()).sum()
 }
 
 fn random_chunk(rng: &mut impl Rng) -> BinaryChunk {
-    let mut d = [0_usize; 4];
-    d.fill_with(|| rng.gen::<usize>());
-    BinaryChunk::from_slice(&d)
+    let mut d = BinaryChunk::default();
+    let r: &mut [ChunkElement; CHUNK_ELEMENTS] = &mut d.as_mut();
+    r.fill_with(|| rng.gen::<ChunkElement>());
+    d
 }

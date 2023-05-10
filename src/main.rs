@@ -12,10 +12,12 @@ fn main() {
     // TODO make this stuff CLI args
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
-    let dimensionality = 5000; // Number of bits in the model
-    let n_examples = 24000; // Turns out that this value pretty much maxes out the model
+    let dimensionality = 10000; // Number of bits in the model
+    let n_examples = 60000; // Number of examples to load - can be set lower for testing
     
     let mut rng = SmallRng::seed_from_u64(0);
+
+    let start = Instant::now();
 
     // Load the dataset - raw images and labels, no vectorization
     print!("Loading data... ");
@@ -85,4 +87,6 @@ fn main() {
     }
     let acc = correct as f64 / test_images.len() as f64;
     println!("Done - Accuracy = {} [{}ms]", acc, now.elapsed().as_millis());
+
+    println!("Total time: {}ms", start.elapsed().as_millis());
 }
