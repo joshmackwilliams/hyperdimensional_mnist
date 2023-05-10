@@ -26,7 +26,7 @@ impl CountingBinaryVector {
     // 0-initialize the vector
     pub fn new(n_chunks: usize) -> Self {
         Self {
-            data: vec![0; n_chunks * COUNTER_BITS],
+            data: vec![BinaryChunk::default(); n_chunks * COUNTER_BITS],
             n_chunks,
         }
     }

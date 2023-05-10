@@ -1,8 +1,9 @@
 use rand::{prelude::SliceRandom, Rng};
 use rayon::prelude::*;
 
-use super::BinaryChunk;
 use super::counting_binary_vector::CountingBinaryVector;
+use super::BinaryChunk;
+use super::CHUNK_SIZE;
 
 // Separating the untrained version allows us to encode training data before actually training
 pub struct UntrainedHDModel {
@@ -28,10 +29,9 @@ impl UntrainedHDModel {
         rng: &mut impl Rng,
     ) -> Self {
         // Compute model dimensionality in chunks by taking the ceiling of the model dimensionality / chunk size
-        let model_dimensionality_chunks =
-            (model_dimensionality + BinaryChunk::BITS as usize - 1) / BinaryChunk::BITS as usize;
+        let model_dimensionality_chunks = (model_dimensionality + CHUNK_SIZE - 1) / CHUNK_SIZE;
         // Compute the actual model dimensionality
-        let model_dimensionality = model_dimensionality_chunks * BinaryChunk::BITS as usize;
+        let model_dimensionality = model_dimensionality_chunks * CHUNK_SIZE;
 
         // Allocate space for quanta vectors
         let mut feature_quanta_vectors: Vec<BinaryChunk> =
@@ -42,7 +42,7 @@ impl UntrainedHDModel {
 
             // Randomly generate the first quantum vector
             feature_quanta_vectors
-                .extend((0..model_dimensionality_chunks).map(|_| rng.gen::<BinaryChunk>()));
+                .extend((0..model_dimensionality_chunks).map(|_| random_chunk(rng)));
 
             // Randomly order some bits to flip
             let mut order_to_flip: Vec<usize> = (0..model_dimensionality).collect();
@@ -67,11 +67,13 @@ impl UntrainedHDModel {
                 // Flip some bits
                 for i in 0..flip_per_quantum {
                     let index_to_flip = order_to_flip[i + (quantum - 1) * flip_per_quantum];
-                    let chunk_to_flip = index_to_flip / BinaryChunk::BITS as usize;
-                    let bit_to_flip = index_to_flip % BinaryChunk::BITS as usize;
-                    feature_quanta_vectors
-                        [feature_offset_chunks + quantum_offset_chunks + chunk_to_flip] ^=
-                        1 << bit_to_flip;
+                    let chunk_to_flip = index_to_flip / CHUNK_SIZE;
+                    let element_to_flip = (index_to_flip % CHUNK_SIZE) / usize::BITS as usize;
+                    let bit_to_flip = index_to_flip % usize::BITS as usize;
+                    let m: &mut [usize] = feature_quanta_vectors
+                        [feature_offset_chunks + quantum_offset_chunks + chunk_to_flip]
+                        .as_mut();
+                    m[element_to_flip] ^= 1 << bit_to_flip;
                 }
             }
         }
@@ -80,7 +82,7 @@ impl UntrainedHDModel {
         let mut feature_vectors =
             Vec::with_capacity(input_dimensionality * model_dimensionality_chunks);
         feature_vectors.resize_with(input_dimensionality * model_dimensionality_chunks, || {
-            rng.gen::<BinaryChunk>()
+            random_chunk(rng)
         });
 
         UntrainedHDModel {
@@ -95,7 +97,8 @@ impl UntrainedHDModel {
     // Encode a batch of images (multithreaded)
     pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
         // Preallocate the output space
-        let mut output = vec![0 as BinaryChunk; input.len() * self.model_dimensionality_chunks];
+        let mut output =
+            vec![BinaryChunk::default(); input.len() * self.model_dimensionality_chunks];
         output
             // Compute one image vector at a time
             .par_chunks_mut(self.model_dimensionality_chunks)
@@ -166,7 +169,7 @@ impl UntrainedHDModel {
                         missed += 1;
                     }
                 });
-            
+
             // Print status
             println!("[Epoch {}] Misclassified: {}", epoch, missed);
 
@@ -215,7 +218,7 @@ impl HDModel {
 pub fn hamming_distance(a: &[BinaryChunk], b: &[BinaryChunk]) -> u32 {
     a.iter()
         .zip(b.iter())
-        .map(|(x, y)| (x ^ y).count_ones())
+        .map(|(x, y)| count_ones_in_chunk(x ^ y))
         .sum()
 }
 
@@ -230,5 +233,16 @@ fn fast_approx_majority(chunks: &[BinaryChunk]) -> BinaryChunk {
     let a = fast_approx_majority(&chunks[..one_third_ceil]);
     let b = fast_approx_majority(&chunks[one_third_floor..(one_third_floor + one_third_ceil)]);
     let c = fast_approx_majority(&chunks[(chunks.len() - one_third_ceil)..]);
-    return (a & b) | (b & c) | (c & a);
+    (a & b) | (b & c) | (c & a)
+}
+
+fn count_ones_in_chunk(x: BinaryChunk) -> u32 {
+    let r: &[usize] = x.as_ref();
+    r.iter().map(|x| x.count_ones()).sum()
+}
+
+fn random_chunk(rng: &mut impl Rng) -> BinaryChunk {
+    let mut d = [0_usize; 4];
+    d.fill_with(|| rng.gen::<usize>());
+    BinaryChunk::from_slice(&d)
 }
