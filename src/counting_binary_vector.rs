@@ -55,6 +55,7 @@ impl CountingBinaryVector {
     }
 
     // Increment the counters at all positions where the given chunk is "1", ignoring zeros.
+    #[inline]
     fn increment(&mut self, chunk_index: usize, mut chunk: BinaryChunk) {
         // Check for positive saturation
         // First, we can only have positive saturation where the sign bit is 0
@@ -76,6 +77,7 @@ impl CountingBinaryVector {
     }
 
     // As above, but decrement instead of incrementing.
+    #[inline]
     fn decrement(&mut self, chunk_index: usize, mut chunk: BinaryChunk) {
         // Check for negative saturation
         // This is exactly the opposite of the positive saturation check in the increment function

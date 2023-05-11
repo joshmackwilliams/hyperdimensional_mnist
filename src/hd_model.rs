@@ -224,6 +224,7 @@ pub fn hamming_distance(a: &[BinaryChunk], b: &[BinaryChunk]) -> u32 {
 
 // Compute the approximate majority of an array of binary chunks
 // TODO think about ways to improve this function
+#[inline]
 fn fast_approx_majority(chunks: &[BinaryChunk]) -> BinaryChunk {
     if chunks.len() < 3 {
         return chunks[0];
@@ -236,11 +237,13 @@ fn fast_approx_majority(chunks: &[BinaryChunk]) -> BinaryChunk {
     (a & b) | (b & c) | (c & a)
 }
 
+#[inline]
 fn count_ones_in_chunk(x: BinaryChunk) -> u32 {
     let r: &[ChunkElement; CHUNK_ELEMENTS] = x.as_ref();
     r.iter().map(|x| x.count_ones()).sum()
 }
 
+#[inline]
 fn random_chunk(rng: &mut impl Rng) -> BinaryChunk {
     let mut d = BinaryChunk::default();
     let r: &mut [ChunkElement; CHUNK_ELEMENTS] = &mut d.as_mut();
