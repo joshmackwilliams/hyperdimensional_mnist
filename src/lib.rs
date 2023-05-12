@@ -3,6 +3,7 @@
 pub mod mnist;
 pub mod hd_model;
 pub mod counting_binary_vector;
+pub mod majority;
 
 pub type ChunkElement = usize;
 pub const CHUNK_ELEMENTS: usize = 8;

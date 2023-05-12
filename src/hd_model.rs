@@ -1,6 +1,8 @@
 use rand::{prelude::SliceRandom, Rng};
 use rayon::prelude::*;
 
+use crate::majority::fast_approx_majority;
+
 use super::counting_binary_vector::CountingBinaryVector;
 use super::{BinaryChunk, ChunkElement, CHUNK_ELEMENTS, CHUNK_SIZE};
 
@@ -10,8 +12,6 @@ pub struct UntrainedHDModel {
     feature_quanta_vectors: Vec<BinaryChunk>,
     // Number of chunks in the model's feature vectors (actual dimensionality / binary chunk size)
     model_dimensionality_chunks: usize,
-    // Number of features in each input example
-    input_dimensionality: usize,
     // Number of class vectors computed by the model
     n_classes: usize,
     // Number of quanta for each feature
@@ -88,7 +88,6 @@ impl UntrainedHDModel {
         UntrainedHDModel {
             feature_quanta_vectors,
             model_dimensionality_chunks,
-            input_dimensionality,
             n_classes,
             input_quanta,
         }
@@ -104,24 +103,20 @@ impl UntrainedHDModel {
             .par_chunks_mut(self.model_dimensionality_chunks)
             // Pair each vector with the corresponding image
             .zip(input.into_par_iter())
-            .for_each_with(
-                Vec::with_capacity(self.input_dimensionality),
-                |chunks: &mut Vec<BinaryChunk>, (output, image)| {
-                    for (chunk_index, chunk) in output.iter_mut().enumerate() {
-                        chunks.clear();
-                        chunks.extend(image.iter().enumerate().map(|(feature, &value)| {
-                            self.feature_quanta_vectors[((feature * self.input_quanta + value)
-                                * self.model_dimensionality_chunks)
-                                + chunk_index]
-                        }));
-
-                        // For some reason, using fast_approx_majority gives better accuracy than the exact majority function
-                        // TODO investigate why
-                        // I've tried adding noise to the exact function but it doesn't match fast_approx_majority
-                        *chunk = fast_approx_majority(chunks);
-                    }
-                },
-            );
+            .for_each(|(output, image)| {
+                output
+                    .iter_mut()
+                    .enumerate()
+                    .for_each(|(chunk_index, chunk)| {
+                        *chunk = fast_approx_majority(image.iter().enumerate().map(
+                            |(feature, &value)| {
+                                self.feature_quanta_vectors[((feature * self.input_quanta + value)
+                                    * self.model_dimensionality_chunks)
+                                    + chunk_index]
+                            },
+                        ));
+                    });
+            });
         output
     }
 
@@ -222,21 +217,6 @@ pub fn hamming_distance(a: &[BinaryChunk], b: &[BinaryChunk]) -> u32 {
         .sum()
 }
 
-// Compute the approximate majority of an array of binary chunks
-// TODO think about ways to improve this function
-#[inline]
-fn fast_approx_majority(chunks: &[BinaryChunk]) -> BinaryChunk {
-    if chunks.len() < 3 {
-        return chunks[0];
-    }
-    let one_third_ceil = (chunks.len() + 2) / 3;
-    let one_third_floor = chunks.len() / 3;
-    let a = fast_approx_majority(&chunks[..one_third_ceil]);
-    let b = fast_approx_majority(&chunks[one_third_floor..(one_third_floor + one_third_ceil)]);
-    let c = fast_approx_majority(&chunks[(chunks.len() - one_third_ceil)..]);
-    (a & b) | (b & c) | (c & a)
-}
-
 #[inline]
 fn count_ones_in_chunk(x: BinaryChunk) -> u32 {
     let r: &[ChunkElement; CHUNK_ELEMENTS] = x.as_ref();
@@ -246,7 +226,7 @@ fn count_ones_in_chunk(x: BinaryChunk) -> u32 {
 #[inline]
 fn random_chunk(rng: &mut impl Rng) -> BinaryChunk {
     let mut d = BinaryChunk::default();
-    let r: &mut [ChunkElement; CHUNK_ELEMENTS] = &mut d.as_mut();
+    let r: &mut [ChunkElement; CHUNK_ELEMENTS] = d.as_mut();
     r.fill_with(|| rng.gen::<ChunkElement>());
     d
 }
