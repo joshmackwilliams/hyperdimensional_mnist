@@ -124,7 +124,7 @@ impl UntrainedHDModel {
     pub fn train(self, examples: &[BinaryChunk], labels: &[usize]) -> HDModel {
         // Allocate space for integer-valued class vectors
         let mut class_vectors =
-            vec![CountingBinaryVector::new(self.model_dimensionality_chunks); self.n_classes];
+            vec![CountingBinaryVector::new(self.model_dimensionality_chunks, 8); self.n_classes];
 
         // Compute initial class vectors
         examples
