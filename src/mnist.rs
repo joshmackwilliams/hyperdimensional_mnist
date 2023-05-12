@@ -24,7 +24,7 @@ pub fn load_mnist(filename: &str, n_examples: usize) -> (Vec<Vec<usize>>, Vec<us
             let image = record
                 .iter()
                 .skip(1) // Skip the label
-                .map(|x| x.parse::<usize>().expect("Failed to parse pixel") / 26) // 10 quanta
+                .map(|x| x.parse::<usize>().expect("Failed to parse pixel") / 128) // 10 quanta
                 .collect();
             (image, label)
         })

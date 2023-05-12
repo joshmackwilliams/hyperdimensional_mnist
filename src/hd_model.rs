@@ -1,5 +1,6 @@
+use std::ops::Deref;
+
 use rand::{prelude::SliceRandom, Rng};
-use rayon::prelude::*;
 
 use crate::majority::fast_approx_majority;
 
@@ -7,6 +8,7 @@ use super::counting_binary_vector::CountingBinaryVector;
 use super::{BinaryChunk, ChunkElement, CHUNK_ELEMENTS, CHUNK_SIZE};
 
 // Separating the untrained version allows us to encode training data before actually training
+#[derive(Clone)]
 pub struct UntrainedHDModel {
     // Binary-valued feature x quanta vectors
     feature_quanta_vectors: Vec<BinaryChunk>,
@@ -94,15 +96,15 @@ impl UntrainedHDModel {
     }
 
     // Encode a batch of images (multithreaded)
-    pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
+    pub fn encode(&self, input: &[impl Deref<Target = [usize]>]) -> Vec<BinaryChunk> {
         // Preallocate the output space
         let mut output =
             vec![BinaryChunk::default(); input.len() * self.model_dimensionality_chunks];
         output
             // Compute one image vector at a time
-            .par_chunks_mut(self.model_dimensionality_chunks)
+            .chunks_mut(self.model_dimensionality_chunks)
             // Pair each vector with the corresponding image
-            .zip(input.into_par_iter())
+            .zip(input.iter())
             .for_each(|(output, image)| {
                 output
                     .iter_mut()
@@ -134,12 +136,40 @@ impl UntrainedHDModel {
                 class_vectors[label].add(example);
             });
 
-        // Initialize a model so we can classify examples during retraining
-        let mut model = HDModel {
+        HDModel {
             untrained_model: self,
             class_vectors,
-        };
+        }
+    }
 
+    pub fn mutate(&self, flip_levels: usize, rng: &mut impl Rng) -> UntrainedHDModel {
+        UntrainedHDModel {
+            feature_quanta_vectors: self
+                .feature_quanta_vectors
+                .iter()
+                .map(|v| mutate_chunk(*v, flip_levels, rng))
+                .collect(),
+            model_dimensionality_chunks: self.model_dimensionality_chunks,
+            n_classes: self.n_classes,
+            input_quanta: self.input_quanta,
+        }
+    }
+}
+
+// Trained version of the model
+// Actually just a wrapper around the untrained model, along with the trained class vectors
+// Note - The counting vectors are included here so that we can keep training online.
+//        This project does no such thing yet, but it could be useful as some point.
+//        Besides, the counting vectors are actually pretty small.
+#[derive(Clone)]
+pub struct HDModel {
+    untrained_model: UntrainedHDModel,
+    class_vectors: Vec<CountingBinaryVector>,
+}
+
+impl HDModel {
+    // Retraininng is separated from training so we can skip it in hypervector design
+    pub fn retrain(&mut self, examples: &[BinaryChunk], labels: &[usize]) {
         // Retraining step greatly improves accuracy
         // We keep running until there's no improvement for five epochs
         // TODO think about how to parallelize this
@@ -152,21 +182,21 @@ impl UntrainedHDModel {
 
             // Classify each example
             examples
-                .chunks(model.untrained_model.model_dimensionality_chunks)
+                .chunks(self.untrained_model.model_dimensionality_chunks)
                 .zip(labels.iter())
                 .for_each(|(example, &label)| {
-                    let predicted = model.classify(example);
+                    let predicted = self.classify(example);
 
                     // If we get it wrong, reinforce the involved class vectors
                     if predicted != label {
-                        model.class_vectors[label].add(example);
-                        model.class_vectors[predicted].subtract(example);
+                        self.class_vectors[label].add(example);
+                        self.class_vectors[predicted].subtract(example);
                         missed += 1;
                     }
                 });
 
             // Print status
-            println!("[Epoch {}] Misclassified: {}", epoch, missed);
+            //println!("[Epoch {}] Misclassified: {}", epoch, missed);
 
             // Evaluate performance - did we improve on our all time best?
             if missed < best {
@@ -177,22 +207,8 @@ impl UntrainedHDModel {
             }
             epoch += 1;
         }
-
-        model
     }
-}
 
-// Trained version of the model
-// Actually just a wrapper around the untrained model, along with the trained class vectors
-// Note - The counting vectors are included here so that we can keep training online.
-//        This project does no such thing yet, but it could be useful as some point.
-//        Besides, the counting vectors are actually pretty small.
-pub struct HDModel {
-    untrained_model: UntrainedHDModel,
-    class_vectors: Vec<CountingBinaryVector>,
-}
-
-impl HDModel {
     // Encode a batch of images (wrapper around untrained model)
     pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
         self.untrained_model.encode(input)
@@ -206,6 +222,28 @@ impl HDModel {
             .min_by_key(|(_, x)| hamming_distance(input, x.as_binary()))
             .unwrap()
             .0
+    }
+
+    pub fn mutate(&self, flip_levels: usize, rng: &mut impl Rng) -> UntrainedHDModel {
+        self.untrained_model.mutate(flip_levels, rng)
+    }
+
+    pub fn evaluate(&self, examples: &[BinaryChunk], labels: &[usize]) -> usize {
+        examples
+            .chunks(self.untrained_model.model_dimensionality_chunks)
+            .zip(labels.iter())
+            .filter(|(example, &label)| self.classify(example) == label)
+            .count()
+    }
+
+    pub fn count_total_class_hamming(&self) -> u32 {
+        let mut sum = 0_u32;
+        for i in 0..self.untrained_model.n_classes {
+            for j in i..self.untrained_model.n_classes {
+                sum += hamming_distance(self.class_vectors[i].as_binary(), self.class_vectors[j].as_binary());
+            }
+        }
+        sum
     }
 }
 
@@ -229,4 +267,18 @@ fn random_chunk(rng: &mut impl Rng) -> BinaryChunk {
     let r: &mut [ChunkElement; CHUNK_ELEMENTS] = d.as_mut();
     r.fill_with(|| rng.gen::<ChunkElement>());
     d
+}
+
+#[inline]
+fn make_mutation_mask(flip_levels: usize, rng: &mut impl Rng) -> BinaryChunk {
+    let mut d = random_chunk(rng);
+    for _ in 0..(flip_levels - 1) {
+        d &= random_chunk(rng);
+    }
+    d
+}
+
+#[inline]
+fn mutate_chunk(d: BinaryChunk, flip_levels: usize, rng: &mut impl Rng) -> BinaryChunk {
+    d ^ make_mutation_mask(flip_levels, rng)
 }
