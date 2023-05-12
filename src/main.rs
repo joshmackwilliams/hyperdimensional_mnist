@@ -1,3 +1,4 @@
+use hd_vsa_mnist::prune_data::{find_prunable_positions, prune_data};
 // For initializing random feature vectors
 use rand::{rngs::SmallRng, SeedableRng};
 
@@ -30,6 +31,10 @@ fn main() {
         train_filename,
         now.elapsed().as_millis()
     );
+
+    let prunable_positions = find_prunable_positions(&train_images, dimensionality);
+    println!("Found {} prunable values", prunable_positions.len());
+    let train_images = prune_data(&train_images, &prunable_positions);
 
     assert!(!train_images.is_empty(), "No training images found!");
     let image_area = train_images[0].len();
@@ -66,6 +71,7 @@ fn main() {
         test_filename,
         now.elapsed().as_millis()
     );
+    let test_images = prune_data(&test_images, &prunable_positions);
 
     // Encode the test data
     print!("Encoding test data... ");
