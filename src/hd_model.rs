@@ -1,15 +1,14 @@
-use rand::{prelude::SliceRandom, Rng};
-use rayon::prelude::*;
+use rand::Rng;
 
 use crate::majority::fast_approx_majority;
 
 use super::counting_binary_vector::CountingBinaryVector;
-use super::{BinaryChunk, ChunkElement, CHUNK_ELEMENTS, CHUNK_SIZE};
+use super::{random_chunk, BinaryChunk, ChunkElement, CHUNK_ELEMENTS, CHUNK_SIZE};
 
 // Separating the untrained version allows us to encode training data before actually training
 pub struct UntrainedHDModel {
     // Binary-valued feature x quanta vectors
-    feature_quanta_vectors: Vec<BinaryChunk>,
+    feature_quanta_vectors: Vec<CountingBinaryVector>,
     // Number of chunks in the model's feature vectors (actual dimensionality / binary chunk size)
     model_dimensionality_chunks: usize,
     // Number of class vectors computed by the model
@@ -29,54 +28,16 @@ impl UntrainedHDModel {
     ) -> Self {
         // Compute model dimensionality in chunks by taking the ceiling of the model dimensionality / chunk size
         let model_dimensionality_chunks = (model_dimensionality + CHUNK_SIZE - 1) / CHUNK_SIZE;
-        // Compute the actual model dimensionality
-        let model_dimensionality = model_dimensionality_chunks * CHUNK_SIZE;
 
         // Allocate space for quanta vectors
-        let mut feature_quanta_vectors: Vec<BinaryChunk> =
+        let mut feature_quanta_vectors: Vec<CountingBinaryVector> =
             Vec::with_capacity(input_dimensionality * input_quanta * model_dimensionality_chunks);
 
-        for feature in 0..input_dimensionality {
-            let feature_offset_chunks = feature * input_quanta * model_dimensionality_chunks;
-
-            // Randomly generate the first quantum vector
-            feature_quanta_vectors
-                .extend((0..model_dimensionality_chunks).map(|_| random_chunk(rng)));
-
-            // Randomly order some bits to flip
-            let mut order_to_flip: Vec<usize> = (0..model_dimensionality).collect();
-            order_to_flip.shuffle(rng);
-            let flip_per_quantum = model_dimensionality / 2 / (input_quanta - 1);
-
-            // Make a vector for each quanta
-            for quantum in 1..input_quanta {
-                // Some useful values
-                let previous_quantum = quantum - 1;
-                let quantum_offset_chunks = quantum * model_dimensionality_chunks;
-                let previous_quantum_offset_chunks = previous_quantum * model_dimensionality_chunks;
-
-                // Copy the previous quanta
-                for i in 0..model_dimensionality_chunks {
-                    feature_quanta_vectors.push(
-                        feature_quanta_vectors
-                            [feature_offset_chunks + previous_quantum_offset_chunks + i],
-                    );
-                }
-
-                // Flip some bits
-                for i in 0..flip_per_quantum {
-                    let index_to_flip = order_to_flip[i + (quantum - 1) * flip_per_quantum];
-                    let chunk_to_flip = index_to_flip / CHUNK_SIZE;
-                    let element_to_flip =
-                        (index_to_flip % CHUNK_SIZE) / ChunkElement::BITS as usize;
-                    let bit_to_flip = index_to_flip % ChunkElement::BITS as usize;
-                    let m: &mut [ChunkElement; CHUNK_ELEMENTS] = feature_quanta_vectors
-                        [feature_offset_chunks + quantum_offset_chunks + chunk_to_flip]
-                        .as_mut();
-                    m[element_to_flip] ^= 1 << bit_to_flip;
-                }
-            }
-        }
+        // Create random quanta vectors
+        feature_quanta_vectors.extend(
+            (0..(input_dimensionality * input_quanta))
+                .map(|_| CountingBinaryVector::random(model_dimensionality_chunks, rng)),
+        );
 
         // Allocate space for binary-valued feature vectors
         let mut feature_vectors =
@@ -100,9 +61,9 @@ impl UntrainedHDModel {
             vec![BinaryChunk::default(); input.len() * self.model_dimensionality_chunks];
         output
             // Compute one image vector at a time
-            .par_chunks_mut(self.model_dimensionality_chunks)
+            .chunks_mut(self.model_dimensionality_chunks)
             // Pair each vector with the corresponding image
-            .zip(input.into_par_iter())
+            .zip(input.into_iter())
             .for_each(|(output, image)| {
                 output
                     .iter_mut()
@@ -110,9 +71,8 @@ impl UntrainedHDModel {
                     .for_each(|(chunk_index, chunk)| {
                         *chunk = fast_approx_majority(image.iter().enumerate().map(
                             |(feature, &value)| {
-                                self.feature_quanta_vectors[((feature * self.input_quanta + value)
-                                    * self.model_dimensionality_chunks)
-                                    + chunk_index]
+                                self.feature_quanta_vectors[feature * self.input_quanta + value]
+                                    .as_binary()[chunk_index]
                             },
                         ));
                     });
@@ -221,12 +181,4 @@ pub fn hamming_distance(a: &[BinaryChunk], b: &[BinaryChunk]) -> u32 {
 fn count_ones_in_chunk(x: BinaryChunk) -> u32 {
     let r: &[ChunkElement; CHUNK_ELEMENTS] = x.as_ref();
     r.iter().map(|x| x.count_ones()).sum()
-}
-
-#[inline]
-fn random_chunk(rng: &mut impl Rng) -> BinaryChunk {
-    let mut d = BinaryChunk::default();
-    let r: &mut [ChunkElement; CHUNK_ELEMENTS] = d.as_mut();
-    r.fill_with(|| rng.gen::<ChunkElement>());
-    d
 }

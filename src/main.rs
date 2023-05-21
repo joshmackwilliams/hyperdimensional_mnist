@@ -13,7 +13,7 @@ fn main() {
     // TODO make this stuff CLI args
     let train_filename = "mnist_train.csv";
     let test_filename = "mnist_test.csv";
-    let dimensionality = 10000; // Number of bits in the model
+    let dimensionality = 512; // Number of bits in the model
     let n_examples = 60000; // Number of examples to load - can be set lower for testing
     
     let mut rng = SmallRng::seed_from_u64(0);
@@ -43,7 +43,7 @@ fn main() {
     print!("Initializing model... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let model = UntrainedHDModel::new(dimensionality, image_area, 10, 10, &mut rng);
+    let model = UntrainedHDModel::new(dimensionality, image_area, 2, 10, &mut rng);
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Encode the training images using the model

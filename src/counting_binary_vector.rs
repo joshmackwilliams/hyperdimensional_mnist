@@ -1,4 +1,5 @@
-use super::BinaryChunk;
+use super::{random_chunk, BinaryChunk};
+use rand::Rng;
 
 // Number of bits in each (signed) counter.
 // 8 is the lowest it can go without accuracy degradation.
@@ -27,6 +28,16 @@ impl CountingBinaryVector {
     pub fn new(n_chunks: usize) -> Self {
         Self {
             data: vec![BinaryChunk::default(); n_chunks * COUNTER_BITS],
+            n_chunks,
+        }
+    }
+
+    // A random vector
+    pub fn random(n_chunks: usize, rng: &mut impl Rng) -> Self {
+        Self {
+            data: (0..(n_chunks * COUNTER_BITS))
+                .map(|_| random_chunk(rng))
+                .collect::<Vec<BinaryChunk>>(),
             n_chunks,
         }
     }
