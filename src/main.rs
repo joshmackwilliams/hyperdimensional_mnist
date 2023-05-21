@@ -46,18 +46,11 @@ fn main() {
     let model = UntrainedHDModel::new(dimensionality, image_area, 2, 10, &mut rng);
     println!("Done [{}ms]", now.elapsed().as_millis());
 
-    // Encode the training images using the model
-    print!("Encoding images using feature vectors... ");
-    let _ = io::stdout().flush();
-    let now = Instant::now();
-    let train_x = model.encode(&train_images);
-    println!("Done [{}ms]", now.elapsed().as_millis());
-
     // Train the model
     println!("=== Training model ===");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let model = model.train(&train_x, &train_y);
+    let model = model.train(&train_images, &train_y);
     println!("=== Done [{}ms] ===", now.elapsed().as_millis());
 
     // Load the test data
@@ -73,19 +66,12 @@ fn main() {
     );
     let test_images = prune_data(&test_images, &prunable_positions);
 
-    // Encode the test data
-    print!("Encoding test data... ");
-    let _ = io::stdout().flush();
-    let now = Instant::now();
-    let test_x = model.encode(&test_images);
-    println!("Done [{}ms]", now.elapsed().as_millis());
-
     // Similarly, test the binary classifier
     print!("Testing binary classifier... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
     let mut correct = 0;
-    for (x, y) in test_x.chunks(test_x.len() / test_images.len()).zip(&test_y) {
+    for (x, y) in test_images.iter().zip(&test_y) {
         let class = model.classify(x);
         if class == *y {
             correct += 1;

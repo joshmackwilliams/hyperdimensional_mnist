@@ -3,7 +3,7 @@ use rand::Rng;
 use crate::majority::fast_approx_majority;
 
 use super::counting_binary_vector::CountingBinaryVector;
-use super::{random_chunk, BinaryChunk, ChunkElement, CHUNK_ELEMENTS, CHUNK_SIZE};
+use super::{BinaryChunk, ChunkElement, CHUNK_ELEMENTS, CHUNK_SIZE};
 
 // Separating the untrained version allows us to encode training data before actually training
 pub struct UntrainedHDModel {
@@ -39,13 +39,6 @@ impl UntrainedHDModel {
                 .map(|_| CountingBinaryVector::random(model_dimensionality_chunks, rng)),
         );
 
-        // Allocate space for binary-valued feature vectors
-        let mut feature_vectors =
-            Vec::with_capacity(input_dimensionality * model_dimensionality_chunks);
-        feature_vectors.resize_with(input_dimensionality * model_dimensionality_chunks, || {
-            random_chunk(rng)
-        });
-
         UntrainedHDModel {
             feature_quanta_vectors,
             model_dimensionality_chunks,
@@ -54,8 +47,8 @@ impl UntrainedHDModel {
         }
     }
 
-    // Encode a batch of images (multithreaded)
-    pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
+    // Encode a batch of images
+    fn batch_encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
         // Preallocate the output space
         let mut output =
             vec![BinaryChunk::default(); input.len() * self.model_dimensionality_chunks];
@@ -65,23 +58,28 @@ impl UntrainedHDModel {
             // Pair each vector with the corresponding image
             .zip(input.into_iter())
             .for_each(|(output, image)| {
-                output
-                    .iter_mut()
-                    .enumerate()
-                    .for_each(|(chunk_index, chunk)| {
-                        *chunk = fast_approx_majority(image.iter().enumerate().map(
-                            |(feature, &value)| {
-                                self.feature_quanta_vectors[feature * self.input_quanta + value]
-                                    .as_binary()[chunk_index]
-                            },
-                        ));
-                    });
+                self.encode(image, output);
             });
         output
     }
 
+    // Encode a single image
+    pub fn encode(&self, input: &[usize], output: &mut [BinaryChunk]) {
+        output
+            .iter_mut()
+            .enumerate()
+            .for_each(|(chunk_index, chunk)| {
+                *chunk = fast_approx_majority(input.iter().enumerate().map(|(feature, &value)| {
+                    self.feature_quanta_vectors[feature * self.input_quanta + value].as_binary()
+                        [chunk_index]
+                }));
+            });
+    }
+
     // Consume self and return a trained model, which can be used to classify examples
-    pub fn train(self, examples: &[BinaryChunk], labels: &[usize]) -> HDModel {
+    pub fn train(self, examples: &[Vec<usize>], labels: &[usize]) -> HDModel {
+        let examples = self.batch_encode(examples);
+
         // Allocate space for integer-valued class vectors
         let mut class_vectors =
             vec![CountingBinaryVector::new(self.model_dimensionality_chunks); self.n_classes];
@@ -115,7 +113,7 @@ impl UntrainedHDModel {
                 .chunks(model.untrained_model.model_dimensionality_chunks)
                 .zip(labels.iter())
                 .for_each(|(example, &label)| {
-                    let predicted = model.classify(example);
+                    let predicted = model.classify_encoded(example);
 
                     // If we get it wrong, reinforce the involved class vectors
                     if predicted != label {
@@ -153,19 +151,21 @@ pub struct HDModel {
 }
 
 impl HDModel {
-    // Encode a batch of images (wrapper around untrained model)
-    pub fn encode(&self, input: &[Vec<usize>]) -> Vec<BinaryChunk> {
-        self.untrained_model.encode(input)
-    }
 
     // Classify one example
-    pub fn classify(&self, input: &[BinaryChunk]) -> usize {
+    pub fn classify_encoded(&self, input: &[BinaryChunk]) -> usize {
         self.class_vectors
             .iter()
             .enumerate()
             .min_by_key(|(_, x)| hamming_distance(input, x.as_binary()))
             .unwrap()
             .0
+    }
+
+    pub fn classify(&self, input: &[usize]) -> usize {
+        let mut encoded = vec![BinaryChunk::default(); self.untrained_model.model_dimensionality_chunks];
+        self.untrained_model.encode(input, &mut encoded);
+        self.classify_encoded(&encoded)
     }
 }
 
