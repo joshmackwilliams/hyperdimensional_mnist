@@ -6,7 +6,7 @@ use rand::{rngs::SmallRng, SeedableRng};
 use std::io::{self, Write};
 use std::time::Instant;
 
-use hd_vsa_mnist::hd_model::UntrainedHDModel;
+use hd_vsa_mnist::hd_model::HDModel;
 use hd_vsa_mnist::mnist::load_mnist;
 
 fn main() {
@@ -43,14 +43,14 @@ fn main() {
     print!("Initializing model... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let model = UntrainedHDModel::new(dimensionality, image_area, 2, 10, &mut rng);
+    let mut model = HDModel::new(dimensionality, image_area, 2, 10, &mut rng);
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Train the model
     println!("=== Training model ===");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let model = model.train(&train_images, &train_y);
+    model.train(&train_images, &train_y);
     println!("=== Done [{}ms] ===", now.elapsed().as_millis());
 
     // Load the test data
