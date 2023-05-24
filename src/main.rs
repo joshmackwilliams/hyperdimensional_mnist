@@ -1,6 +1,7 @@
 use hd_vsa_mnist::prune_data::{find_prunable_positions, prune_data};
 // For initializing random feature vectors
 use rand::{rngs::SmallRng, SeedableRng};
+use rayon::prelude::*;
 
 // Needed to write partial lines to the console
 use std::io::{self, Write};
@@ -15,7 +16,7 @@ fn main() {
     let test_filename = "mnist_test.csv";
     let dimensionality = 16000; // Number of bits in the model
     let n_examples = 60000; // Number of examples to load - can be set lower for testing
-    
+
     let mut rng = SmallRng::seed_from_u64(0);
 
     let start = Instant::now();
@@ -84,15 +85,17 @@ fn main() {
     print!("Testing binary classifier... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let mut correct = 0;
-    for (x, y) in test_x.chunks(test_x.len() / test_images.len()).zip(&test_y) {
-        let class = model.classify(x);
-        if class == *y {
-            correct += 1;
-        }
-    }
+    let correct: usize = test_x
+        .par_chunks(test_x.len() / test_images.len())
+        .zip(test_y.par_iter())
+        .map(|(x, y)| if model.classify(x) == *y { 1 } else { 0 })
+        .sum();
     let acc = correct as f64 / test_images.len() as f64;
-    println!("Done - Accuracy = {} [{}ms]", acc, now.elapsed().as_millis());
+    println!(
+        "Done - Accuracy = {} [{}ms]",
+        acc,
+        now.elapsed().as_millis()
+    );
 
     println!("Total time: {}ms", start.elapsed().as_millis());
 }

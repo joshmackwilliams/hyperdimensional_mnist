@@ -5,12 +5,13 @@ use rand::Rng;
 use rayon::prelude::*;
 
 pub struct HDModel {
-    // Binary-valued feature x quanta vectors
+    // Binary-valued feature x quanta vectors, ordered to be chunk-major for encoding performance
     feature_vectors: Vec<BinaryChunk>,
     // Number of chunks in the model's feature vectors (actual dimensionality / binary chunk size)
     model_dimensionality_chunks: usize,
     // One vector representing the prototype of each class
     class_vectors: Vec<CountingBinaryVector>,
+    input_dimensionality: usize,
 }
 
 impl HDModel {
@@ -39,6 +40,7 @@ impl HDModel {
             feature_vectors,
             model_dimensionality_chunks,
             class_vectors,
+            input_dimensionality,
         }
     }
 
@@ -51,9 +53,8 @@ impl HDModel {
                     .into_par_iter()
                     .map(|chunk_index| {
                         fast_approx_majority(image.iter().enumerate().map(|(feature, &value)| {
-                            self.feature_vectors[((feature * 2 + value)
-                                * self.model_dimensionality_chunks)
-                                + chunk_index]
+                            self.feature_vectors
+                                [(chunk_index * self.input_dimensionality + feature) * 2 + value]
                         }))
                     })
             })
@@ -69,18 +70,32 @@ impl HDModel {
             let mut missed = 0_usize;
 
             // Classify each example
+            const BATCH_SIZE: usize = 128;
+            let mut predictions = [0_usize; BATCH_SIZE];
             examples
-                .chunks(self.model_dimensionality_chunks)
-                .zip(labels.iter())
-                .for_each(|(example, &label)| {
-                    let predicted = self.classify(example);
+                // Take BATCH_SIZE examples at a time
+                .chunks(self.model_dimensionality_chunks * BATCH_SIZE)
+                .zip(labels.chunks(BATCH_SIZE))
+                .for_each(|(examples, labels)| {
+                    // In parallel, classify each example
+                    examples
+                        .par_chunks(self.model_dimensionality_chunks)
+                        .zip(predictions.par_iter_mut())
+                        .for_each(|(example, prediction)| {
+                            *prediction = self.classify(example);
+                        });
 
-                    // If we get it wrong, reinforce the involved class vectors
-                    if predicted != label {
-                        self.class_vectors[label].add(example.iter().copied());
-                        self.class_vectors[predicted].add(example.iter().copied().map(|x| !x));
-                        missed += 1;
-                    }
+                    // For each example we got wrong, reinforce the involved class vectors
+                    examples
+                        .chunks(self.model_dimensionality_chunks)
+                        .zip(predictions.iter())
+                        .zip(labels.iter())
+                        .filter(|((_, &predicted), &label)| predicted != label)
+                        .for_each(|((example, &predicted), &label)| {
+                            self.class_vectors[label].add(example.iter().copied());
+                            self.class_vectors[predicted].add(example.iter().copied().map(|x| !x));
+                            missed += 1;
+                        });
                 });
 
             // Print status
