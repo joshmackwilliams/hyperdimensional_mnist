@@ -2,8 +2,7 @@ use super::BinaryChunk;
 
 // Number of bits in each (signed) counter.
 // 8 is the lowest it can go without accuracy degradation.
-// This parameter has a significant impact on training performance.
-const COUNTER_BITS: usize = 8;
+const COUNTER_BITS: usize = 12;
 
 // A binary vector that can efficiently compute the majority of its components.
 //
@@ -37,63 +36,30 @@ impl CountingBinaryVector {
     }
 
     // Add a binary vector to this vector
-    pub fn add(&mut self, chunks: &[BinaryChunk]) {
-        for (chunk_index, &chunk) in chunks.iter().enumerate() {
+    pub fn add(&mut self, chunks: impl IntoIterator<Item = BinaryChunk>) {
+        for (chunk_index, chunk) in chunks.into_iter().enumerate() {
             // Counter intuitive, but in this project, 0 represents positive and 1 represents negative
             // Intuition here is that we're storing the sign values of negatives
-            self.increment(chunk_index, !chunk);
-            self.decrement(chunk_index, chunk);
+            self.add_chunk(chunk_index, chunk)
         }
     }
 
-    // Subtract a binary vector from this vector (same as adding the inverse, but we invert it inline here)
-    pub fn subtract(&mut self, chunks: &[BinaryChunk]) {
-        for (chunk_index, &chunk) in chunks.iter().enumerate() {
-            self.decrement(chunk_index, !chunk);
-            self.increment(chunk_index, chunk);
-        }
-    }
-
-    // Increment the counters at all positions where the given chunk is "1", ignoring zeros.
     #[inline]
-    fn increment(&mut self, chunk_index: usize, mut chunk: BinaryChunk) {
-        // Check for positive saturation
-        // First, we can only have positive saturation where the sign bit is 0
-        let mut positive_saturation = !self.data[(COUNTER_BITS - 1) * self.n_chunks + chunk_index];
-        // Then, we can only have it where all other bits are 1
+    fn add_chunk(&mut self, chunk_index: usize, chunk: BinaryChunk) {
+        // Saturation check
+        // We are saturated where the sign bit matches the operator, and all other bits do not match the operator
+        let sign_bits = self.data[(COUNTER_BITS - 1) * self.n_chunks + chunk_index];
+        let mut mask = sign_bits ^ chunk;
         for bit in 0..(COUNTER_BITS - 1) {
-            positive_saturation &= self.data[bit * self.n_chunks + chunk_index];
+            mask |= !(self.data[bit * self.n_chunks + chunk_index] ^ chunk);
         }
-        // Don't do addition in saturated bits
-        chunk &= !positive_saturation;
 
-        // Do the addition
+        // Do the operation
         for bit in 0..COUNTER_BITS {
-            let bit_offset = bit * self.n_chunks;
-            let current_value = self.data[bit_offset + chunk_index];
-            self.data[bit_offset + chunk_index] = current_value ^ chunk;
-            chunk = current_value & chunk;
-        }
-    }
-
-    // As above, but decrement instead of incrementing.
-    #[inline]
-    fn decrement(&mut self, chunk_index: usize, mut chunk: BinaryChunk) {
-        // Check for negative saturation
-        // This is exactly the opposite of the positive saturation check in the increment function
-        let mut negative_saturation = self.data[(COUNTER_BITS - 1) * self.n_chunks + chunk_index];
-        for bit in 0..(COUNTER_BITS - 1) {
-            negative_saturation &= !self.data[bit * self.n_chunks + chunk_index];
-        }
-        // Don't do subtraction in saturated bits
-        chunk &= !negative_saturation;
-
-        // Do the subtraction. Now, instead of being "carry", our chunk is "borrow"
-        for bit in 0..COUNTER_BITS {
-            let bit_offset = bit * self.n_chunks;
-            let current_value = self.data[bit_offset + chunk_index];
-            self.data[bit_offset + chunk_index] = current_value ^ chunk;
-            chunk = (!current_value) & chunk;
+            let current_value = &mut self.data[bit * self.n_chunks + chunk_index];
+            let carry = *current_value ^ chunk;
+            *current_value ^= mask;
+            mask &= carry;
         }
     }
 }

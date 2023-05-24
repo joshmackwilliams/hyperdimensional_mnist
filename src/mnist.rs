@@ -1,6 +1,5 @@
 // Load MNIST images from a csv file.
 // Returns a tuple of (images, labels)
-// Currently quantizes the images to 10 intensity levels
 // TODO: make quantization a separate function, or at least a parameter
 // The expected format is:
 // - No headers
@@ -24,7 +23,7 @@ pub fn load_mnist(filename: &str, n_examples: usize) -> (Vec<Vec<usize>>, Vec<us
             let image = record
                 .iter()
                 .skip(1) // Skip the label
-                .map(|x| x.parse::<usize>().expect("Failed to parse pixel") / 26) // 10 quanta
+                .map(|x| x.parse::<usize>().expect("Failed to parse pixel") / 128) // 10 quanta
                 .collect();
             (image, label)
         })
