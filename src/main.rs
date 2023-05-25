@@ -2,6 +2,7 @@ use hd_vsa_mnist::prune_data::{find_prunable_positions, prune_data};
 // For initializing random feature vectors
 use rand::{rngs::SmallRng, SeedableRng};
 use rayon::prelude::*;
+use clap::Parser;
 
 // Needed to write partial lines to the console
 use std::io::{self, Write};
@@ -10,12 +11,26 @@ use std::time::Instant;
 use hd_vsa_mnist::hd_model::HDModel;
 use hd_vsa_mnist::mnist::load_mnist;
 
+/// Run HD learning on the MNIST dataset
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    // Path to the training data, in CSV format
+    #[arg(long, default_value = "mnist_train.csv")]
+    train_filename: String,
+    // Path to the test data, in CSV format
+    #[arg(long, default_value = "mnist_test.csv")]
+    test_filename: String,
+    // Number of bits in the model
+    #[arg(short, long, default_value_t = 1024)]
+    dimensionality: usize,
+    // Number of examples to load
+    #[arg(short, long, default_value_t = 60000)]
+    n_examples: usize,
+}
+
 fn main() {
-    // TODO make this stuff CLI args
-    let train_filename = "mnist_train.csv";
-    let test_filename = "mnist_test.csv";
-    let dimensionality = 16000; // Number of bits in the model
-    let n_examples = 60000; // Number of examples to load - can be set lower for testing
+    let args = Args::parse();
 
     let mut rng = SmallRng::seed_from_u64(0);
 
@@ -25,15 +40,15 @@ fn main() {
     print!("Loading data... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let (train_images, train_y) = load_mnist(train_filename, n_examples);
+    let (train_images, train_y) = load_mnist(&args.train_filename, args.n_examples);
     println!(
         "Loaded {} examples from {} [{}ms]",
         train_images.len(),
-        train_filename,
+        &args.train_filename,
         now.elapsed().as_millis()
     );
 
-    let prunable_positions = find_prunable_positions(&train_images, dimensionality);
+    let prunable_positions = find_prunable_positions(&train_images, 2);
     println!("Found {} prunable values", prunable_positions.len());
     let train_images = prune_data(&train_images, &prunable_positions);
 
@@ -44,7 +59,7 @@ fn main() {
     print!("Initializing model... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let mut model = HDModel::new(dimensionality, image_area, 10, &mut rng);
+    let mut model = HDModel::new(args.dimensionality, image_area, 10, &mut rng);
     println!("Done [{}ms]", now.elapsed().as_millis());
 
     // Encode the training images using the model
@@ -65,11 +80,11 @@ fn main() {
     print!("Loading test data... ");
     let _ = io::stdout().flush();
     let now = Instant::now();
-    let (test_images, test_y) = load_mnist(test_filename, usize::MAX);
+    let (test_images, test_y) = load_mnist(&args.test_filename, usize::MAX);
     println!(
         "Loaded {} examples from {} [{}ms]",
         test_images.len(),
-        test_filename,
+        &args.test_filename,
         now.elapsed().as_millis()
     );
     let test_images = prune_data(&test_images, &prunable_positions);
